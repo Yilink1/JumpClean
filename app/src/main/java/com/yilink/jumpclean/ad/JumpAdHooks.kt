@@ -63,7 +63,6 @@ object JumpAdHooks {
     private const val KEY_HIDE_HOT_DISCUSS = "hide_hot_discuss"
     private const val KEY_HIDE_PUBLISH_TOPIC = "hide_publish_topic"
     private const val KEY_HIDE_POST_AD = "hide_post_ad"
-    // KEY_HIDE_RECOMMEND_FEED_AD 已删除：功能与 KEY_HIDE_POST_AD 重复且有副作用
     private const val KEY_HIDE_DISCOVER_TOP_AD = "hide_discover_top_ad"
     private const val KEY_HIDE_DISCOVER_BANNER = "hide_discover_banner"
     private const val KEY_HIDE_PHOTO_WALL = "hide_photo_wall"
@@ -133,7 +132,6 @@ object JumpAdHooks {
     private var mainActivitySeen = false
 
     private var lastMainLayoutTime = 0L
-    private var lastMsgLayoutTime = 0L
     private var lastDetailLayoutTime = 0L
 
     @Volatile
@@ -168,6 +166,7 @@ object JumpAdHooks {
         hookStartupDelayCompress(lpparam)
         hookActivityFlowProbe()
         hookBlockClipboard(lpparam)
+        hookFakeNotificationPermission(lpparam)
     }
 
     private fun hookSplashInstantJump(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -365,6 +364,41 @@ object JumpAdHooks {
             log("✔ 剪贴板读保护 Hook 已安装")
         } catch (e: Exception) {
             logError("✘ 剪贴板保护 Hook 失败", e)
+        }
+    }
+
+    /**
+     * 源头伪造系统通知权限：使 App 认为用户已授权通知，彻底阻断通知开启引导
+     */
+    private fun hookFakeNotificationPermission(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val returnTrueHook = object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_MSG_PUSH_GUIDE)) {
+                    param.result = true
+                }
+            }
+        }
+
+        // 1. AndroidX 兼容库 NotificationManagerCompat.areNotificationsEnabled()
+        try {
+            val compatClass = XposedHelpers.findClassIfExists("androidx.core.app.NotificationManagerCompat", lpparam.classLoader)
+            if (compatClass != null) {
+                XposedHelpers.findAndHookMethod(compatClass, "areNotificationsEnabled", returnTrueHook)
+                log("✔ NotificationManagerCompat 权限伪造 Hook 已安装")
+            }
+        } catch (e: Exception) {
+            logError("NotificationManagerCompat Hook 失败", e)
+        }
+
+        // 2. 原生 android.app.NotificationManager.areNotificationsEnabled()
+        try {
+            val nmClass = XposedHelpers.findClassIfExists("android.app.NotificationManager", lpparam.classLoader)
+            if (nmClass != null) {
+                XposedHelpers.findAndHookMethod(nmClass, "areNotificationsEnabled", returnTrueHook)
+                log("✔ 原生 NotificationManager 权限伪造 Hook 已安装")
+            }
+        } catch (e: Exception) {
+            logError("原生 NotificationManager Hook 失败", e)
         }
     }
 
@@ -604,7 +638,6 @@ object JumpAdHooks {
 
     private fun hookViewLayer(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookMainActivityUI(lpparam)
-        hookMsgActivity(lpparam)
         hookAdViews(lpparam)
         hookContentDetailMemberMask(lpparam)
         hookContentDetailScrollUnlock(lpparam)
@@ -684,56 +717,6 @@ object JumpAdHooks {
 
         if (isFeatureEnabled(activity, KEY_HIDE_HOT_DISCUSS)) {
             hideTextItem(activity, "查看所有话题")
-        }
-    }
-
-    private fun hookMsgActivity(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val msgActivityClass = XposedHelpers.findClassIfExists("com.vgjump.jump.ui.content.msg.MsgIndexActivity", lpparam.classLoader) ?: return
-        try {
-            XposedBridge.hookAllMethods(msgActivityClass, "onCreate", object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    try {
-                        val activity = param.thisObject as Activity
-                        applyMsgVisibility(activity)
-
-                        activity.window?.decorView?.rootView?.viewTreeObserver
-                            ?.addOnGlobalLayoutListener {
-                                val now = SystemClock.uptimeMillis()
-                                if (now - lastMsgLayoutTime >= THROTTLE_INTERVAL_MS) {
-                                    lastMsgLayoutTime = now
-                                    applyMsgVisibility(activity)
-                                }
-                            }
-                    } catch (e: Exception) {
-                        logError("MsgIndexActivity onCreate 异常", e)
-                    }
-                }
-            })
-            XposedBridge.hookAllMethods(msgActivityClass, "onResume", object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    try {
-                        applyMsgVisibility(param.thisObject as Activity)
-                    } catch (e: Exception) {
-                        logError("MsgIndexActivity onResume 异常", e)
-                    }
-                }
-            })
-            log("✔ 消息页净化 Hook 已安装")
-        } catch (e: Exception) {
-            logError("✘ 消息页净化 Hook 失败", e)
-        }
-    }
-
-    private fun applyMsgVisibility(activity: Activity) {
-        if (!isFeatureEnabled(activity, KEY_HIDE_MSG_PUSH_GUIDE)) return
-        try {
-            val decorView = activity.window?.decorView ?: return
-            getCachedResId(activity, "clNotificationGuide").takeIf { it != 0 }?.let { id ->
-                collapseTargetViews(decorView, ArrayList<Int>().apply { add(id) })
-            }
-            hideTextItem(activity, "开启推送通知")
-        } catch (e: Exception) {
-            logError("消息页可见性设置异常", e)
         }
     }
 
