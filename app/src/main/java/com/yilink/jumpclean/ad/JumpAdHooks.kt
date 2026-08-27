@@ -63,7 +63,7 @@ object JumpAdHooks {
     private const val KEY_HIDE_HOT_DISCUSS = "hide_hot_discuss"
     private const val KEY_HIDE_PUBLISH_TOPIC = "hide_publish_topic"
     private const val KEY_HIDE_POST_AD = "hide_post_ad"
-    private const val KEY_HIDE_RECOMMEND_FEED_AD = "hide_recommend_feed_ad"
+    // KEY_HIDE_RECOMMEND_FEED_AD 已删除：功能与 KEY_HIDE_POST_AD 重复且有副作用
     private const val KEY_HIDE_DISCOVER_TOP_AD = "hide_discover_top_ad"
     private const val KEY_HIDE_DISCOVER_BANNER = "hide_discover_banner"
     private const val KEY_HIDE_PHOTO_WALL = "hide_photo_wall"
@@ -103,31 +103,22 @@ object JumpAdHooks {
     )
 
     private val OFFICIAL_ICONS = listOf(
-        // 行 1：JUMP 字母常规系列 (4个)
         JumpIconModel("默认", "member_change_icon_default", "com.vgjump.jump.ui.main.launch.SplashActivity", "launch_alias_default"),
         JumpIconModel("会员", "member_change_icon_plus", "com.vgjump.jump.icon_plus", "launch_alias_plus"),
         JumpIconModel("深色", "member_change_icon_dark", "com.vgjump.jump.icon_dark", "launch_alias_dark"),
         JumpIconModel("红白", "member_change_icon_white", "com.vgjump.jump.icon_white", "launch_alias_white"),
-
-        // 行 2：单字母 J+ 质感系列 (4个)
         JumpIconModel("黑白", "member_change_icon_black", "com.vgjump.jump.icon_black", "launch_alias_black"),
         JumpIconModel("J+", "member_change_icon_default_j", "com.vgjump.jump.default_j", "launch_alias_default_j"),
         JumpIconModel("深色 J+", "member_change_icon_dark_j", "com.vgjump.jump.icon_dark_j", "launch_alias_dark_j"),
         JumpIconModel("红白 J+", "member_change_icon_white_j", "com.vgjump.jump.white_j", "launch_alias_white_j"),
-
-        // 行 3：极简单黑 J+ 与自然光影 (4个)
         JumpIconModel("黑白 J+", "member_change_icon_black_j", "com.vgjump.jump.icon_black_j", "launch_alias_black_j"),
         JumpIconModel("Golden Hour", "member_change_icon_golden_hour", "com.vgjump.jump.icon_golden_hour", "launch_alias_golden_hour"),
         JumpIconModel("黎明", "member_change_icon_dawn", "com.vgjump.jump.icon_dawn", "launch_alias_dawn"),
         JumpIconModel("晌午", "member_change_icon_noon", "com.vgjump.jump.icon_noon", "launch_alias_noon"),
-
-        // 行 4：夜间质感与多彩 (4个)
         JumpIconModel("午夜", "member_change_icon_night", "com.vgjump.jump.icon_night", "launch_alias_night"),
         JumpIconModel("夜视", "member_change_icon_night_vision", "com.vgjump.jump.icon_night_vision", "launch_alias_night_vision"),
         JumpIconModel("金属", "member_change_icon_metal", "com.vgjump.jump.icon_metal", "launch_alias_metal"),
         JumpIconModel("多彩", "member_change_icon_colorful", "com.vgjump.jump.icon_colorful", "launch_alias_colorful"),
-
-        // 行 5：经典主机情怀 (5个)
         JumpIconModel("Switch", "member_change_icon_switch", "com.vgjump.jump.icon_switch", "launch_alias_switch"),
         JumpIconModel("NES", "member_change_icon_nes", "com.vgjump.jump.icon_nes", "launch_alias_nes"),
         JumpIconModel("PS2", "member_change_icon_ps2", "com.vgjump.jump.icon_ps2", "launch_alias_ps2"),
@@ -382,35 +373,7 @@ object JumpAdHooks {
     // ============================================================
 
     private fun hookDataLayer(lpparam: XC_LoadPackage.LoadPackageParam) {
-        hookRecommendFeedAd(lpparam)
         hookHomeRecommendAd(lpparam)
-    }
-
-    private fun hookRecommendFeedAd(lpparam: XC_LoadPackage.LoadPackageParam) {
-        try {
-            val invokeTargetClass = XposedHelpers.findClassIfExists("xn0", lpparam.classLoader) ?: return
-            XposedBridge.hookAllMethods(invokeTargetClass, "invoke", object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    if (!isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_RECOMMEND_FEED_AD)) return
-                    try {
-                        val holder = param.args.getOrNull(0) ?: return
-                        if (!holder.javaClass.name.contains("com.drake.brv.a")) return
-
-                        val data = XposedHelpers.callMethod(holder, "e")
-                        if (data != null && data.javaClass.name.contains("ContentListSDKAD")) {
-                            val itemView = XposedHelpers.getObjectField(holder, "itemView") as? View ?: return
-                            collapseView(itemView)
-                            (itemView.parent as? View)?.requestLayout()
-                        }
-                    } catch (e: Exception) {
-                        logError("信息流广告过滤异常", e)
-                    }
-                }
-            })
-            log("✔ 信息流广告数据过滤 Hook 已安装")
-        } catch (e: Exception) {
-            logError("✘ 信息流广告数据过滤 Hook 失败", e)
-        }
     }
 
     private fun hookHomeRecommendAd(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -774,35 +737,59 @@ object JumpAdHooks {
         }
     }
 
+    /**
+     * 通用广告容器拦截：精准 collapse NativeAdContainer 自身，
+     * 不再向上牵连整个 RecyclerView item（避免误伤同卡片内的正文图片）。
+     * 同时覆盖首页推荐流广告位与帖子/评论详情页内嵌广告位（clADSDKContainer）。
+     */
     private fun hookAdViews(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             val nativeAdClass = XposedHelpers.findClassIfExists("com.qq.e.ads.nativ.widget.NativeAdContainer", lpparam.classLoader) ?: return
+
+            val collapseAdAction: (View) -> Unit = { view ->
+                if (isFeatureEnabled(view.context, KEY_HIDE_POST_AD)) {
+                    collapseView(view)
+                }
+            }
+
             XposedBridge.hookAllConstructors(nativeAdClass, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val view = param.thisObject as? View ?: return
-                        if (isFeatureEnabled(view.context, KEY_HIDE_POST_AD)) collapseView(view)
+                        collapseAdAction(view)
                     } catch (e: Exception) {
                         logError("NativeAdContainer 构造拦截异常", e)
                     }
                 }
             })
+
+            XposedHelpers.findAndHookMethod(View::class.java, "onAttachedToWindow", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    try {
+                        val view = param.thisObject as? View ?: return
+                        if (nativeAdClass.isInstance(view)) {
+                            collapseAdAction(view)
+                        }
+                    } catch (_: Exception) {}
+                }
+            })
+
             XposedBridge.hookAllMethods(nativeAdClass, "setVisibility", object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     try {
                         val view = param.thisObject as? View ?: return
                         if (isFeatureEnabled(view.context, KEY_HIDE_POST_AD)) {
                             param.args[0] = View.GONE
-                            collapseView(view)
+                            collapseAdAction(view)
                         }
                     } catch (e: Exception) {
                         logError("NativeAdContainer setVisibility 拦截异常", e)
                     }
                 }
             })
-            log("✔ 帖子内广告 Hook 已安装")
+            log("✔ 通用广告容器（首页推荐流 + 帖子内嵌）Hook 已安装")
         } catch (e: Exception) {
-            logError("✘ 帖子内广告 Hook 失败", e)
+            logError("✘ 通用广告容器 Hook 失败", e)
         }
     }
 
@@ -1054,14 +1041,13 @@ object JumpAdHooks {
         val items = listOf(
             SectionHeader("启动与隐私"),
             SettingItem(KEY_SKIP_SPLASH, "跳过开屏广告"),
-            SettingItem(KEY_ENABLE_COPY, "解除文本复制限制"),
             SettingItem(KEY_BLOCK_CLIPBOARD, "禁止后台读取剪贴板"),
 
             SectionHeader("首页"),
-            SettingItem(KEY_HIDE_RECOMMEND_FEED_AD, "隐藏推荐流广告"),
-            SettingItem(KEY_HIDE_BANNER, "隐藏首页轮播广告", desc = "可能影响首页「好友」标签页的图片显示"),
             SettingItem(KEY_HIDE_TOPIC_LIST, "隐藏顶部话题"),
+            SettingItem(KEY_HIDE_BANNER, "隐藏首页轮播广告", desc = "可能影响首页「好友」标签页的图片显示"),
             SettingItem(KEY_HIDE_HOT_DISCUSS, "隐藏 Jumper 热议"),
+            SettingItem(KEY_HIDE_POST_AD, "隐藏推荐流与帖子内嵌广告"),
             SettingItem(KEY_HIDE_PUBLISH_TOPIC, "隐藏发帖按钮"),
 
             SectionHeader("发现"),
@@ -1069,7 +1055,7 @@ object JumpAdHooks {
             SettingItem(KEY_HIDE_DISCOVER_BANNER, "隐藏轮播广告"),
 
             SectionHeader("内容与详情"),
-            SettingItem(KEY_HIDE_POST_AD, "隐藏帖子内嵌广告"),
+            SettingItem(KEY_ENABLE_COPY, "解除文本复制限制"),
             SettingItem(KEY_HIDE_CONTENT_MEMBER_MASK, "解锁游戏评价总结"),
 
             SectionHeader("个人中心"),
@@ -1571,7 +1557,6 @@ object JumpAdHooks {
             val pm = context.packageManager
             val pkgName = context.packageName
 
-            // 1. 禁用旧别名
             if (oldAliasClass.isNotBlank() && oldAliasClass != newAliasClass) {
                 pm.setComponentEnabledSetting(
                     ComponentName(pkgName, oldAliasClass),
@@ -1580,7 +1565,6 @@ object JumpAdHooks {
                 )
             }
 
-            // 2. 同步写入官方 short alias key
             try {
                 val mmkvClass = XposedHelpers.findClassIfExists("com.tencent.mmkv.MMKV", context.classLoader)
                 if (mmkvClass != null) {
@@ -1589,14 +1573,12 @@ object JumpAdHooks {
                 }
             } catch (_: Exception) {}
 
-            // 3. 启用新别名
             pm.setComponentEnabledSetting(
                 ComponentName(pkgName, newAliasClass),
                 PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
                 PackageManager.DONT_KILL_APP
             )
 
-            // 4. 发起自重启
             Toast.makeText(context, "图标已更换，正在重载...", Toast.LENGTH_SHORT).show()
 
             val restartIntent = Intent().apply {
@@ -1673,6 +1655,9 @@ object JumpAdHooks {
         }
     }
 
+    /**
+     * 彻底折叠 View 并清零内外边距及尺寸
+     */
     private fun collapseView(view: View, safeMode: Boolean = false) {
         if (view.visibility != View.GONE) view.visibility = View.GONE
         view.isEnabled = false
@@ -1681,14 +1666,21 @@ object JumpAdHooks {
         view.isFocusable = false
         view.isFocusableInTouchMode = false
         if (!safeMode) {
-            view.layoutParams?.let {
-                if (it.height != 0 || it.width != 0) {
-                    it.height = 0
-                    it.width = 0
-                    view.layoutParams = it
+            val params = view.layoutParams
+            if (params != null) {
+                params.height = 0
+                params.width = 0
+                if (params is ViewGroup.MarginLayoutParams) {
+                    params.topMargin = 0
+                    params.bottomMargin = 0
+                    params.leftMargin = 0
+                    params.rightMargin = 0
                 }
+                view.layoutParams = params
             }
+            view.setPadding(0, 0, 0, 0)
         }
+        (view.parent as? View)?.requestLayout()
     }
 
     private fun hidePersistently(view: View) {
@@ -1713,9 +1705,7 @@ object JumpAdHooks {
      */
     private fun getDefaultFeatureValue(key: String): Boolean {
         return when (key) {
-            // 默认开启：开屏广告、首页推荐流/轮播/顶部话题/热议、发现顶部/轮播、帖子内嵌广告、底栏「Jump 赏」/「抽奖」
             KEY_SKIP_SPLASH,
-            KEY_HIDE_RECOMMEND_FEED_AD,
             KEY_HIDE_BANNER,
             KEY_HIDE_TOPIC_LIST,
             KEY_HIDE_HOT_DISCUSS,
@@ -1725,7 +1715,6 @@ object JumpAdHooks {
             KEY_HIDE_WEB_TAB,
             KEY_HIDE_LOTTERY_TAB -> true
 
-            // 默认关闭：其余定制项
             KEY_HIDE_PUBLISH_TOPIC,
             KEY_HIDE_PHOTO_WALL,
             KEY_HIDE_MEMBER_CARD,
