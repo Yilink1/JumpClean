@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:label="JumpClean"
+        android:supportsRtl="true">
+
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="Jump 社区净化增强模块" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="82" />
+        <!-- 静态作用域声明：标准名称为 xposedscope，引用 @array/xposedscope -->
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/xposedscope" />
+
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="true"
+            android:label="JumpClean 设置">
+            <!-- 声明为主入口，指定为 Xposed 模块设置（桌面不生成图标） -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

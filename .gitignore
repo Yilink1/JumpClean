@@ -1,0 +1,30 @@
+# 1. 构建产物与缓存（忽略所有层级的 build 目录）
+*.iml
+.gradle
+build/
+*/build/
+/build
+/captures
+.externalNativeBuild
+.cxx
+
+# 2. 本地 SDK 与环境配置（严格禁止上传）
+local.properties
+/local.properties
+
+# 3. IDE 个人配置文件（直接整目录忽略）
+.idea/
+/.idea/
+
+# 4. 系统临时文件
+.DS_Store
+Thumbs.db
+
+# 5. 签名密钥与导出 APK（核心安全防线）
+*.jks
+*.keystore
+*.apk
+*.aab
+app/release/
+
+app/release/
