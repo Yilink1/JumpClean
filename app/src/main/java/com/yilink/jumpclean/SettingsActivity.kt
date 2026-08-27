@@ -117,7 +117,7 @@ class SettingsActivity : Activity() {
                 setTextColor(Color.WHITE)
             })
             addView(TextView(context).apply {
-                text = if (isActive) "LSPosed / Hook 服务正常运行" else "请在 LSPosed 中勾选本模块与宿主并重启"
+                text = if (isActive) "LSPosed / Hook 服务正常运行" else "请在 LSPosed 中勾选本模块与宿主"
                 textSize = 12f
                 setTextColor(if (isActive) Color.parseColor("#E0F8EE") else Color.parseColor("#FFEAEA"))
                 setPadding(0, dp(2), 0, 0)

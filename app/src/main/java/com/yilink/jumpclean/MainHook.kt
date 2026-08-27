@@ -9,8 +9,15 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 class MainHook : IXposedHookLoadPackage {
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
 
-        // 1. 自身激活自检：精确匹配无参私有方法 isActivated()
-        if (lpparam.packageName == "com.yilink.jumpclean") {
+        // 1. 宿主拦截
+        if (lpparam.packageName == "com.vgjump.jump") {
+            HookUtils.log("Target loaded: ${lpparam.packageName}")
+            JumpAdHooks.hook(lpparam)
+            return
+        }
+
+        // 2. 模块自身激活自检：支持任何后缀的 jumpclean 包名（Debug/Release 通用）
+        if (lpparam.packageName.contains("jumpclean")) {
             try {
                 val settingsClass = XposedHelpers.findClassIfExists(
                     "com.yilink.jumpclean.SettingsActivity",
@@ -22,19 +29,8 @@ class MainHook : IXposedHookLoadPackage {
                         "isActivated",
                         XC_MethodReplacement.returnConstant(true)
                     )
-                } else {
-                    HookUtils.err("激活自检失败：未找到 SettingsActivity 类")
                 }
-            } catch (e: Throwable) {
-                HookUtils.err("激活自检 Hook 失败", e)
-            }
-            return
-        }
-
-        // 2. 宿主拦截
-        if (lpparam.packageName == "com.vgjump.jump") {
-            HookUtils.log("Target loaded: ${lpparam.packageName}")
-            JumpAdHooks.hook(lpparam)
+            } catch (_: Throwable) {}
         }
     }
 }
