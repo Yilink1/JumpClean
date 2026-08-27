@@ -1024,6 +1024,7 @@ object JumpAdHooks {
         val items = listOf(
             SectionHeader("启动与隐私"),
             SettingItem(KEY_SKIP_SPLASH, "跳过开屏广告"),
+            SettingItem(KEY_HIDE_MSG_PUSH_GUIDE, "屏蔽通知开启引导"),
             SettingItem(KEY_BLOCK_CLIPBOARD, "禁止后台读取剪贴板"),
 
             SectionHeader("首页"),
@@ -1049,7 +1050,6 @@ object JumpAdHooks {
             SectionHeader("底栏与小组件"),
             SettingItem(KEY_HIDE_WEB_TAB, "隐藏底栏「Jump 赏」"),
             SettingItem(KEY_HIDE_LOTTERY_TAB, "隐藏底栏「抽奖 / 全新 App」"),
-            SettingItem(KEY_HIDE_MSG_PUSH_GUIDE, "隐藏消息通知开启引导"),
             SettingItem(KEY_HIDE_WIDGET_VIP_TAG, "隐藏小组件会员标识"),
 
             SectionHeader("个性化与拓展"),
