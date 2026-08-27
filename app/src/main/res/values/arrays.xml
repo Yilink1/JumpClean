@@ -2,5 +2,6 @@
 <resources>
     <string-array name="xposedscope">
         <item>com.vgjump.jump</item>
+        <item>com.yilink.jumpclean</item>
     </string-array>
 </resources>
