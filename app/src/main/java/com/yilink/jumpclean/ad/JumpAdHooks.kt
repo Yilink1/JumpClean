@@ -42,7 +42,7 @@ import java.util.ArrayList
 import java.util.function.Function
 
 /**
- * JumpClean — Jump App 界面净化与体验增强模块（极限性能与彻底静默版）
+ * JumpClean — Jump App 界面净化与体验增强模块
  */
 object JumpAdHooks {
 
@@ -102,6 +102,13 @@ object JumpAdHooks {
         "content_list_waterfall_ad_sdk_item",
         "content_list_waterfall_ad_lottery_item",
         "content_list_waterfall_ad_steam_price_item"
+    )
+
+    private val HOT_DISCUSS_LAYOUT_NAMES = setOf(
+        "content_list_topic_discuss_item",
+        "content_list_hot_discuss_item",
+        "content_home_hot_discuss_item",
+        "content_home_topic_item"
     )
 
     // ==================== 21 组物理级精准图标映射 ====================
@@ -413,7 +420,7 @@ object JumpAdHooks {
     }
 
     // ============================================================
-    // 第 2 层：数据/渲染层 Hook（单点直击 Header 与信息流广告）
+    // 第 2 层：数据/渲染层 Hook（单点直击 Header、广告与 Jumper 热议）
     // ============================================================
 
     private fun hookDataLayer(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -458,7 +465,7 @@ object JumpAdHooks {
                             null
                         } ?: return
 
-                        // 1. 首页顶部 Header 绑定瞬间：精准折叠内部的广告 RelativeLayout(R.id.banner)，保留话题栏
+                        // 1. 首页顶部 Header：折叠广告 RelativeLayout(R.id.banner)，保留话题栏
                         if (resName.contains("general_interest_home_header")) {
                             if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_BANNER)) {
                                 val bannerId = getCachedResId(context, "banner")
@@ -466,14 +473,30 @@ object JumpAdHooks {
                                     itemView.findViewById<View>(bannerId)?.let { bannerView ->
                                         if (bannerView.visibility != View.GONE) {
                                             collapseView(bannerView)
-                                            log("✔ [首页顶部 Header] 单点折叠广告 banner 完成（保留话题栏且无白框）")
+                                            log("✔ [首页顶部 Header] 单点折叠广告 banner 完成")
                                         }
                                     }
                                 }
                             }
                         }
 
-                        // 2. 信息流推荐内嵌广告：精准折叠对应广告 Item
+                        // 2. Jumper 热议模块：通过布局名或专属组件 ID (flAllTopic / clIndicator) 精准折叠
+                        if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_HOT_DISCUSS)) {
+                            val allTopicId = getCachedResId(context, "flAllTopic")
+                            val indicatorId = getCachedResId(context, "clIndicator")
+                            val isHotDiscussItem = resName in HOT_DISCUSS_LAYOUT_NAMES ||
+                                    (allTopicId != 0 && itemView.findViewById<View>(allTopicId) != null) ||
+                                    (indicatorId != 0 && itemView.findViewById<View>(indicatorId) != null)
+
+                            if (isHotDiscussItem) {
+                                collapseView(itemView)
+                                (itemView.parent as? View)?.requestLayout()
+                                log("✔ [Jumper 热议] 成功命中并彻底折叠热议卡片: $resName")
+                                return
+                            }
+                        }
+
+                        // 3. 信息流推荐内嵌广告：折叠广告 Item
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_POST_AD) && resName in POST_AD_LAYOUT_NAMES) {
                             log("✔ [信息流广告] 成功命中并折叠 Layout: $resName")
                             collapseView(itemView)
@@ -486,7 +509,7 @@ object JumpAdHooks {
             }
 
             XposedBridge.hookAllMethods(adapterClass, "onBindViewHolder", onBindHook)
-            log("✔ BRV 极速单点广告过滤 Hook 已就绪")
+            log("✔ BRV 极速单点广告与热议过滤 Hook 已就绪")
         } catch (e: Exception) {
             logError("✘ BRV Adapter Hook 失败", e)
         }
@@ -753,10 +776,6 @@ object JumpAdHooks {
             activity.window?.decorView?.let { decorView ->
                 collapseTargetViews(decorView, activeTargetIds)
             }
-        }
-
-        if (isFeatureEnabled(activity, KEY_HIDE_HOT_DISCUSS)) {
-            hideTextItem(activity, "查看所有话题")
         }
     }
 
@@ -1647,33 +1666,6 @@ object JumpAdHooks {
     // 内部工具方法
     // ============================================================
 
-    private fun hideTextItem(activity: Activity, text: String) {
-        try {
-            val decorView = activity.window?.decorView ?: return
-            val textViews = ArrayList<View>()
-            decorView.findViewsWithText(textViews, text, View.FIND_VIEWS_WITH_TEXT)
-            textViews.forEach { tv ->
-                var current: View? = tv
-                while (current?.parent != null) {
-                    val parent = current.parent
-                    if (parent.javaClass.name.contains("RecyclerView")) {
-                        collapseView(current, false)
-                        (parent as? ViewGroup)?.let { vg ->
-                            val idx = vg.indexOfChild(current)
-                            if (idx != -1 && idx + 1 < vg.childCount) {
-                                collapseView(vg.getChildAt(idx + 1), false)
-                            }
-                        }
-                        break
-                    }
-                    current = parent as? View
-                }
-            }
-        } catch (e: Exception) {
-            logError("文本项隐藏失败", e)
-        }
-    }
-
     /**
      * 彻底折叠 View 并清零内外边距及尺寸
      */
@@ -1796,7 +1788,7 @@ object JumpAdHooks {
     }
 
     /**
-     * 统一日志入口：完全受调试日志开关控制（关闭时彻底静默）
+     * 统一日志入口：完全受调试日志开关控制
      */
     private fun log(msg: String) {
         if (isFeatureEnabledSafe(targetClassLoader, KEY_ENABLE_DEBUG_LOG)) {
