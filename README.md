@@ -1,6 +1,6 @@
 ﻿# JumpClean
 
-面向 Jump Android 客户端的 LSPosed 界面净化与体验增强模块。
+面向 Jump 客户端的 LSPosed 界面净化与体验增强模块。
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Android-green.svg)](https://developer.android.com)
