@@ -37,11 +37,12 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
+import java.io.File
 import java.util.ArrayList
 import java.util.function.Function
 
 /**
- * JumpClean — Jump App 界面净化与体验增强模块
+ * JumpClean — Jump App 界面净化与体验增强模块（极限性能单点直击版）
  */
 object JumpAdHooks {
 
@@ -49,7 +50,6 @@ object JumpAdHooks {
 
     private const val PREFS_NAME = "jumpclean_settings"
     private const val TAG = "JumpClean"
-    private const val DEBUG = false
 
     private const val SETTING_ITEM_TITLE = "JumpClean 设置"
 
@@ -75,6 +75,7 @@ object JumpAdHooks {
     private const val KEY_ENABLE_COPY = "enable_article_copy"
     private const val KEY_HIDE_CONTENT_MEMBER_MASK = "hide_content_member_mask"
     private const val KEY_BLOCK_CLIPBOARD = "block_clipboard"
+    private const val KEY_ENABLE_DEBUG_LOG = "enable_debug_log"
 
     // Byazt SDK 内部常量
     private const val KEY_EVENT_CODE = -0x5f5e0f3
@@ -91,6 +92,17 @@ object JumpAdHooks {
     // View 隐藏重试
     private val RETRY_DELAYS_MS = longArrayOf(500L, 1500L, 3000L)
     private const val THROTTLE_INTERVAL_MS = 50L
+
+    // ==================== 广告 Layout 资源黑名单 ====================
+
+    private val POST_AD_LAYOUT_NAMES = setOf(
+        "content_list_ad_sdk_item",
+        "content_list_ad_steam_price_item",
+        "content_list_ad_lottery_item",
+        "content_list_waterfall_ad_sdk_item",
+        "content_list_waterfall_ad_lottery_item",
+        "content_list_waterfall_ad_steam_price_item"
+    )
 
     // ==================== 21 组物理级精准图标映射 ====================
 
@@ -136,14 +148,16 @@ object JumpAdHooks {
 
     @Volatile
     private var currentActivityName = ""
+    private var targetClassLoader: ClassLoader? = null
 
     // ==================== 入口 ====================
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (lpparam.packageName != "com.vgjump.jump") return
 
+        targetClassLoader = lpparam.classLoader
         processStartTime = SystemClock.uptimeMillis()
-        log("JumpClean 开始加载")
+        logInit("JumpClean 开始加载")
 
         hookFrameworkLayer(lpparam)
         hookDataLayer(lpparam)
@@ -152,7 +166,7 @@ object JumpAdHooks {
         hookSettingsEntry(lpparam)
         hookSettingActivityEntry(lpparam)
 
-        log("JumpClean 加载完成")
+        logInit("JumpClean 加载完成")
     }
 
     // ============================================================
@@ -195,6 +209,7 @@ object JumpAdHooks {
                 }
             }
         })
+        logInit("✔ SplashActivity 穿透 Hook 已就绪")
     }
 
     private fun hookByaztFastFail(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -220,7 +235,7 @@ object JumpAdHooks {
                     }
                 }
             })
-            log("✔ Byazt 开屏请求快速阻断 Hook 已安装")
+            logInit("✔ Byazt 开屏请求快速阻断 Hook 已安装")
         } catch (e: Exception) {
             logError("✘ Byazt 请求级 Hook 失败", e)
         }
@@ -275,7 +290,7 @@ object JumpAdHooks {
                     } catch (_: Exception) {}
                 }
             })
-            log("✔ Byazt 开屏渲染基类 Hook 已安装")
+            logInit("✔ Byazt 开屏渲染基类 Hook 已安装")
         } catch (e: Exception) {
             logError("✘ Byazt 渲染基类 Hook 失败", e)
         }
@@ -309,7 +324,7 @@ object JumpAdHooks {
                     }
                 }
             )
-            log("✔ 启动延迟瞬时压缩 Hook 已安装")
+            logInit("✔ 启动延迟瞬时压缩 Hook 已安装")
         } catch (e: Exception) {
             logError("✘ 启动延迟压缩 Hook 失败", e)
         }
@@ -361,15 +376,12 @@ object JumpAdHooks {
                     }
                 }
             })
-            log("✔ 剪贴板读保护 Hook 已安装")
+            logInit("✔ 剪贴板读保护 Hook 已安装")
         } catch (e: Exception) {
             logError("✘ 剪贴板保护 Hook 失败", e)
         }
     }
 
-    /**
-     * 源头伪造系统通知权限：使 App 认为用户已授权通知，彻底阻断通知开启引导
-     */
     private fun hookFakeNotificationPermission(lpparam: XC_LoadPackage.LoadPackageParam) {
         val returnTrueHook = object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
@@ -379,23 +391,21 @@ object JumpAdHooks {
             }
         }
 
-        // 1. AndroidX 兼容库 NotificationManagerCompat.areNotificationsEnabled()
         try {
             val compatClass = XposedHelpers.findClassIfExists("androidx.core.app.NotificationManagerCompat", lpparam.classLoader)
             if (compatClass != null) {
                 XposedHelpers.findAndHookMethod(compatClass, "areNotificationsEnabled", returnTrueHook)
-                log("✔ NotificationManagerCompat 权限伪造 Hook 已安装")
+                logInit("✔ NotificationManagerCompat 权限伪造 Hook 已安装")
             }
         } catch (e: Exception) {
             logError("NotificationManagerCompat Hook 失败", e)
         }
 
-        // 2. 原生 android.app.NotificationManager.areNotificationsEnabled()
         try {
             val nmClass = XposedHelpers.findClassIfExists("android.app.NotificationManager", lpparam.classLoader)
             if (nmClass != null) {
                 XposedHelpers.findAndHookMethod(nmClass, "areNotificationsEnabled", returnTrueHook)
-                log("✔ 原生 NotificationManager 权限伪造 Hook 已安装")
+                logInit("✔ 原生 NotificationManager 权限伪造 Hook 已安装")
             }
         } catch (e: Exception) {
             logError("原生 NotificationManager Hook 失败", e)
@@ -403,52 +413,86 @@ object JumpAdHooks {
     }
 
     // ============================================================
-    // 第 2 层：数据层 Hook
+    // 第 2 层：数据/渲染层 Hook（单点直击 Header 与信息流广告）
     // ============================================================
 
     private fun hookDataLayer(lpparam: XC_LoadPackage.LoadPackageParam) {
-        hookHomeRecommendAd(lpparam)
+        hookBrvAdapters(lpparam)
     }
 
-    private fun hookHomeRecommendAd(lpparam: XC_LoadPackage.LoadPackageParam) {
-        try {
-            val vc0Class = XposedHelpers.findClassIfExists("defpackage.vc0", lpparam.classLoader) ?: return
-            val adapterClass = findBrvAdapterClass(lpparam.classLoader) ?: return
+    private fun findBrvAdapterClass(classLoader: ClassLoader): Class<*>? {
+        val knownNames = listOf("com.drake.brv.b", "zn0", "yn0", "xn0", "wn0")
+        for (name in knownNames) {
+            try {
+                val cls = XposedHelpers.findClassIfExists(name, classLoader) ?: continue
+                return cls
+            } catch (_: Exception) {}
+        }
+        return null
+    }
 
-            XposedBridge.hookAllMethods(adapterClass, "invoke", object : XC_MethodHook() {
+    /**
+     * 单点直击：在 BRV 绑定 View 的一瞬间完成广告折叠，零全局遍历，零多余开销
+     */
+    private fun hookBrvAdapters(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            val adapterClass = findBrvAdapterClass(lpparam.classLoader)
+            if (adapterClass == null) {
+                logError("BRV Adapter Hook 失败：未找到 Adapter 基类")
+                return
+            }
+
+            val onBindHook = object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
-                    if (!isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_BANNER)) return
                     try {
                         val holder = param.args.getOrNull(0) ?: return
-                        val data = XposedHelpers.callMethod(holder, "e")
-                        if (data != null && vc0Class.isInstance(data)) {
-                            val itemView = XposedHelpers.getObjectField(holder, "itemView") as? View ?: return
+                        val itemView = XposedHelpers.getObjectField(holder, "itemView") as? View ?: return
+                        val context = itemView.context ?: return
+
+                        val itemViewType = try {
+                            XposedHelpers.callMethod(holder, "getItemViewType") as? Int
+                        } catch (_: Exception) {
+                            null
+                        } ?: return
+
+                        val resName = try {
+                            context.resources.getResourceEntryName(itemViewType)
+                        } catch (_: Exception) {
+                            null
+                        } ?: return
+
+                        // 1. 首页顶部 Header 绑定瞬间：精准折叠内部的广告 RelativeLayout(R.id.banner)，保留话题栏
+                        if (resName.contains("general_interest_home_header")) {
+                            if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_BANNER)) {
+                                val bannerId = getCachedResId(context, "banner")
+                                if (bannerId != 0) {
+                                    itemView.findViewById<View>(bannerId)?.let { bannerView ->
+                                        if (bannerView.visibility != View.GONE) {
+                                            collapseView(bannerView)
+                                            log("✔ [首页顶部 Header] 单点折叠广告 banner 完成（保留话题栏且无白框）")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 2. 信息流推荐内嵌广告：精准折叠对应广告 Item
+                        if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_POST_AD) && resName in POST_AD_LAYOUT_NAMES) {
+                            log("✔ [信息流广告] 成功命中并折叠 Layout: $resName")
                             collapseView(itemView)
                             (itemView.parent as? View)?.requestLayout()
                         }
                     } catch (e: Exception) {
-                        logError("HomeRecommend 广告过滤异常", e)
+                        logError("BRV onBindViewHolder 过滤异常", e)
                     }
                 }
-            })
-            log("✔ 首页轮播广告数据过滤 Hook 已安装")
-        } catch (e: Exception) {
-            logError("✘ 首页轮播广告数据过滤 Hook 失败", e)
-        }
-    }
+            }
 
-    private fun findBrvAdapterClass(classLoader: ClassLoader): Class<*>? {
-        val knownNames = listOf("xn0", "yn0", "zn0", "wn0")
-        for (name in knownNames) {
-            try {
-                val cls = XposedHelpers.findClassIfExists(name, classLoader)
-                if (cls != null) {
-                    cls.getDeclaredMethod("invoke", Any::class.java)
-                    return cls
-                }
-            } catch (_: Exception) {}
+            XposedBridge.hookAllMethods(adapterClass, "onBindViewHolder", onBindHook)
+            logInit("✔ BRV 极速单点广告过滤 Hook 已就绪")
+        } catch (e: Exception) {
+            logError("✘ BRV Adapter Hook 失败", e)
         }
-        return null
     }
 
     // ============================================================
@@ -568,7 +612,7 @@ object JumpAdHooks {
                     }
                 })
             }
-            log("✔ WebView 文章复制解锁 Hook 已安装")
+            logInit("✔ WebView 文章复制解锁 Hook 已安装")
         } catch (e: Exception) {
             logError("✘ WebView 文章复制解锁 Hook 失败", e)
         }
@@ -626,14 +670,14 @@ object JumpAdHooks {
                     enableTextCopy(param.thisObject as? TextView, lpparam.classLoader)
                 }
             })
-            log("✔ 原生 TextView 复制解锁 Hook 已安装")
+            logInit("✔ 原生 TextView 复制解锁 Hook 已安装")
         } catch (e: Exception) {
             logError("✘ 原生 TextView 复制解锁 Hook 失败", e)
         }
     }
 
     // ============================================================
-    // 第 4 层：View 层 UI 净化
+    // 第 4 层：View 层 UI 净化（极简扁平匹配，绝不挂多余布局监听）
     // ============================================================
 
     private fun hookViewLayer(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -667,7 +711,7 @@ object JumpAdHooks {
                     }
                 }
             )
-            log("✔ 首页 UI 净化 Hook 已安装")
+            logInit("✔ 首页 UI 净化 Hook 已安装")
         } catch (e: Exception) {
             logError("✘ 首页 UI 净化 Hook 失败", e)
         }
@@ -688,7 +732,6 @@ object JumpAdHooks {
         }
 
         val targets = mapOf(
-            "banner" to KEY_HIDE_BANNER,
             "rvOpt" to KEY_HIDE_TOPIC_LIST,
             "ivPublishTopic" to KEY_HIDE_PUBLISH_TOPIC,
             "clPhotoWall" to KEY_HIDE_PHOTO_WALL,
@@ -720,11 +763,17 @@ object JumpAdHooks {
         }
     }
 
-    /**
-     * 通用广告容器拦截：精准 collapse NativeAdContainer 自身，
-     * 不再向上牵连整个 RecyclerView item（避免误伤同卡片内的正文图片）。
-     * 同时覆盖首页推荐流广告位与帖子/评论详情页内嵌广告位（clADSDKContainer）。
-     */
+    private fun collapseTargetViews(view: View, targetIds: ArrayList<Int>) {
+        if (targetIds.contains(view.id)) {
+            collapseView(view)
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                collapseTargetViews(view.getChildAt(i), targetIds)
+            }
+        }
+    }
+
     private fun hookAdViews(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             val nativeAdClass = XposedHelpers.findClassIfExists("com.qq.e.ads.nativ.widget.NativeAdContainer", lpparam.classLoader) ?: return
@@ -770,7 +819,7 @@ object JumpAdHooks {
                     }
                 }
             })
-            log("✔ 通用广告容器（首页推荐流 + 帖子内嵌）Hook 已安装")
+            logInit("✔ 通用广告容器（首页推荐流 + 帖子内嵌）Hook 已安装")
         } catch (e: Exception) {
             logError("✘ 通用广告容器 Hook 失败", e)
         }
@@ -808,7 +857,7 @@ object JumpAdHooks {
                     }
                 }
             })
-            log("✔ 会员遮罩隐藏 Hook 已安装")
+            logInit("✔ 会员遮罩隐藏 Hook 已安装")
         } catch (e: Exception) {
             logError("✘ 会员遮罩隐藏 Hook 失败", e)
         }
@@ -898,7 +947,7 @@ object JumpAdHooks {
                 logError("滚动解锁 Hook 失败 (${className})", e)
             }
         }
-        log("✔ 详情页滚动解锁 Hook 已安装")
+        logInit("✔ 详情页滚动解锁 Hook 已安装")
     }
 
     // ============================================================
@@ -1007,7 +1056,7 @@ object JumpAdHooks {
                     }
                 }
             )
-            log("✔ 快捷入口（长按「我的」Tab）已安装")
+            logInit("✔ 快捷入口（长按「我的」Tab）已安装")
         } catch (e: Exception) {
             logError("✘ 快捷入口 Hook 失败", e)
         }
@@ -1029,7 +1078,7 @@ object JumpAdHooks {
 
             SectionHeader("首页"),
             SettingItem(KEY_HIDE_TOPIC_LIST, "隐藏顶部话题"),
-            SettingItem(KEY_HIDE_BANNER, "隐藏首页轮播广告", desc = "可能影响首页「好友」标签页的图片显示"),
+            SettingItem(KEY_HIDE_BANNER, "隐藏首页轮播广告"),
             SettingItem(KEY_HIDE_HOT_DISCUSS, "隐藏 Jumper 热议"),
             SettingItem(KEY_HIDE_POST_AD, "隐藏推荐流与帖子内嵌广告"),
             SettingItem(KEY_HIDE_PUBLISH_TOPIC, "隐藏发帖按钮"),
@@ -1053,6 +1102,7 @@ object JumpAdHooks {
             SettingItem(KEY_HIDE_WIDGET_VIP_TAG, "隐藏小组件会员标识"),
 
             SectionHeader("个性化与拓展"),
+            SettingItem(KEY_ENABLE_DEBUG_LOG, "开启调试日志", desc = "输出 Hook 安装与广告命中详情至 LSPosed 日志"),
             ActionItem("更换 App 图标", desc = "修复官方遗漏图标，含 21 款") {
                 showVisualIconGridPicker(activity)
             }
@@ -1627,17 +1677,6 @@ object JumpAdHooks {
         }
     }
 
-    private fun collapseTargetViews(view: View, targetIds: ArrayList<Int>) {
-        if (targetIds.contains(view.id)) {
-            collapseView(view)
-        }
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                collapseTargetViews(view.getChildAt(i), targetIds)
-            }
-        }
-    }
-
     /**
      * 彻底折叠 View 并清零内外边距及尺寸
      */
@@ -1706,7 +1745,8 @@ object JumpAdHooks {
             KEY_HIDE_WIDGET_VIP_TAG,
             KEY_ENABLE_COPY,
             KEY_HIDE_CONTENT_MEMBER_MASK,
-            KEY_BLOCK_CLIPBOARD -> false
+            KEY_BLOCK_CLIPBOARD,
+            KEY_ENABLE_DEBUG_LOG -> false
 
             else -> false
         }
@@ -1722,32 +1762,63 @@ object JumpAdHooks {
         }
     }
 
-    private fun isFeatureEnabledSafe(classLoader: ClassLoader, key: String): Boolean {
-        return try {
-            val activityThread = XposedHelpers.findClass("android.app.ActivityThread", classLoader)
+    private fun isFeatureEnabledSafe(classLoader: ClassLoader?, key: String): Boolean {
+        val cl = classLoader ?: targetClassLoader ?: JumpAdHooks::class.java.classLoader
+
+        // 1. 常规尝试通过 Application 读取 SP
+        try {
+            val activityThread = XposedHelpers.findClass("android.app.ActivityThread", cl)
             val currentApp = XposedHelpers.callStaticMethod(activityThread, "currentApplication") as? Context
             if (currentApp != null) {
-                isFeatureEnabled(currentApp, key)
+                return isFeatureEnabled(currentApp, key)
+            }
+        } catch (_: Exception) {}
+
+        // 2. 启动极早期 (currentApp 为 null) 自适应多路径读取 SP XML 文件兜底
+        return try {
+            val candidatePaths = listOf(
+                "/data/user/0/com.vgjump.jump/shared_prefs/${PREFS_NAME}.xml",
+                "/data/data/com.vgjump.jump/shared_prefs/${PREFS_NAME}.xml"
+            )
+            val spFile = candidatePaths.map { File(it) }.firstOrNull { it.exists() }
+            if (spFile != null) {
+                val content = spFile.readText()
+                if (content.contains("""name="$key" value="true"""") || content.contains("""name="$key">true<""")) {
+                    true
+                } else if (content.contains("""name="$key" value="false"""") || content.contains("""name="$key">false<""")) {
+                    false
+                } else {
+                    getDefaultFeatureValue(key)
+                }
             } else {
                 getDefaultFeatureValue(key)
             }
-        } catch (e: Exception) {
-            logError("安全读取设置失败: $key", e)
+        } catch (_: Exception) {
             getDefaultFeatureValue(key)
         }
     }
 
+    /**
+     * 启动/初始化阶段日志：仅在进程加载时输出一次，不受 Application Context 尚未就绪的限制
+     */
+    private fun logInit(msg: String) {
+        HookUtils.log(msg)
+    }
+
+    /**
+     * 运行阶段日志（拦截/滑动触发）：受调试日志开关控制
+     */
     private fun log(msg: String) {
-        if (DEBUG) {
-            HookUtils.log("[$TAG] $msg")
+        if (isFeatureEnabledSafe(targetClassLoader, KEY_ENABLE_DEBUG_LOG)) {
+            HookUtils.log(msg)
         }
     }
 
     private fun logError(msg: String, e: Exception? = null) {
         if (e != null) {
-            HookUtils.err("[$TAG] $msg", e)
+            HookUtils.err(msg, e)
         } else {
-            HookUtils.log("[$TAG] ✘ $msg")
+            HookUtils.log("✘ $msg")
         }
     }
 }
