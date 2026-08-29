@@ -136,7 +136,7 @@ object JumpAdHooks {
         JumpIconModel("午夜", "member_change_icon_night", "com.vgjump.jump.icon_night", "launch_alias_night"),
         JumpIconModel("夜视", "member_change_icon_night_vision", "com.vgjump.jump.icon_night_vision", "launch_alias_night_vision"),
         JumpIconModel("金属", "member_change_icon_metal", "com.vgjump.jump.icon_metal", "launch_alias_metal"),
-        JumpIconModel("多彩", "member_change_icon_colorful", "com.vgjump.jump.icon_colorful", "launch_alias_colorful"),
+        JumpIconModel("多彩", "member_change_icon_colorful", "com.vgjump.jump.icon_colorful", "launch_colorful"),
         JumpIconModel("Switch", "member_change_icon_switch", "com.vgjump.jump.icon_switch", "launch_alias_switch"),
         JumpIconModel("NES", "member_change_icon_nes", "com.vgjump.jump.icon_nes", "launch_alias_nes"),
         JumpIconModel("PS2", "member_change_icon_ps2", "com.vgjump.jump.icon_ps2", "launch_alias_ps2"),
@@ -363,27 +363,63 @@ object JumpAdHooks {
         }
     }
 
+    /**
+     * 精准判断当前剪贴板调用是否为用户在 UI 上触发的主动粘贴操作（覆盖原生控件及 Chromium WebView 交互）
+     */
+    private fun isUserPasteAction(): Boolean {
+        return try {
+            val stackTrace = Thread.currentThread().stackTrace
+            val checkDepth = minOf(stackTrace.size, 25)
+            for (i in 0 until checkDepth) {
+                val element = stackTrace[i]
+                val className = element.className
+                val methodName = element.methodName
+
+                if (className.startsWith("android.widget.Editor") ||
+                    className.startsWith("android.widget.TextView") ||
+                    className.contains("SelectActionModeCallback") ||
+                    className.contains("chromium", true) ||
+                    methodName == "onTextContextMenuItem" ||
+                    methodName == "paste"
+                ) {
+                    return true
+                }
+            }
+            false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun hookBlockClipboard(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             val clipboardManagerClass = XposedHelpers.findClass("android.content.ClipboardManager", lpparam.classLoader)
-            val blockHook = object : XC_MethodHook() {
+
+            // 1. 针对获取内容的接口做精准判断
+            val contentHook = object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     if (isFeatureEnabledSafe(lpparam.classLoader, KEY_BLOCK_CLIPBOARD)) {
-                        param.result = null
+                        if (!isUserPasteAction()) {
+                            param.result = null
+                        }
                     }
                 }
             }
-            XposedHelpers.findAndHookMethod(clipboardManagerClass, "getPrimaryClip", blockHook)
-            XposedHelpers.findAndHookMethod(clipboardManagerClass, "getText", blockHook)
-            XposedHelpers.findAndHookMethod(clipboardManagerClass, "getPrimaryClipDescription", blockHook)
+            XposedHelpers.findAndHookMethod(clipboardManagerClass, "getPrimaryClip", contentHook)
+            XposedHelpers.findAndHookMethod(clipboardManagerClass, "getText", contentHook)
+
+            // 2. 针对探测类接口直接返回 false，彻底断绝 SDK 后续探测与 NPE 闪退隐患
             XposedHelpers.findAndHookMethod(clipboardManagerClass, "hasPrimaryClip", object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     if (isFeatureEnabledSafe(lpparam.classLoader, KEY_BLOCK_CLIPBOARD)) {
-                        param.result = false
+                        if (!isUserPasteAction()) {
+                            param.result = false
+                        }
                     }
                 }
             })
-            log("✔ 剪贴板读保护 Hook 已安装")
+
+            log("✔ 剪贴板读保护（支持主动粘贴且防闪退）Hook 已安装")
         } catch (e: Exception) {
             logError("✘ 剪贴板保护 Hook 失败", e)
         }
