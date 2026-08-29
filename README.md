@@ -53,7 +53,8 @@
 
 ## 安装使用
 
-1. 从 Releases 页面下载并安装最新版 APK。
+1. 从 [Releases](https://github.com/Yilink1/JumpClean/releases) 页面下载并安装最新版 APK。
+
 2. 在 LSPosed 管理器中启用 JumpClean，并将作用域勾选为 Jump。
 3. 强制停止 Jump 客户端并重新打开。
 4. 在客户端首页**长按底部「我的」Tab**进入模块设置。
