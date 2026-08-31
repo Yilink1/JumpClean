@@ -49,7 +49,7 @@
 
 - **目标应用**：Jump（包名 com.vgjump.jump）
 - **系统要求**：Android 7.0（API 24）及以上
-- **支持框架**：LSPosed / KernelSU / Magisk 等兼容 Xposed API 82+ 的框架
+- **支持框架**：LSPosed (Zygisk / Riru) 等兼容 Xposed API 82+ 的框架
 
 ## 安装使用
 
