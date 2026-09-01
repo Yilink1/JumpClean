@@ -491,6 +491,15 @@ object JumpAdHooks {
                         val itemView = XposedHelpers.getObjectField(holder, "itemView") as? View ?: return
                         val context = itemView.context ?: return
 
+                        // 0. Jump+ 会员卡片：在 BRV 渲染绑定瞬间精准折叠，彻底根除后置监听导致的闪烁
+                        if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_MEMBER_CARD)) {
+                            val buyBtnId = getCachedResId(context, "tvBuy")
+                            if (buyBtnId != 0 && itemView.findViewById<View>(buyBtnId) != null) {
+                                collapseView(itemView)
+                                return
+                            }
+                        }
+
                         val itemViewType = try {
                             XposedHelpers.callMethod(holder, "getItemViewType") as? Int
                         } catch (_: Exception) {
@@ -1231,6 +1240,7 @@ object JumpAdHooks {
         })
 
         // 2. 点击拦截
+        /*
         XposedBridge.hookAllMethods(settingActivityClass, "s", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 try {
@@ -1241,6 +1251,7 @@ object JumpAdHooks {
                 }
             }
         })
+        */
     }
 
     private val hookedSettingAdapters = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Class<*>, Boolean>())
