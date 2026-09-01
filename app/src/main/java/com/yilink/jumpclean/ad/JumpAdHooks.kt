@@ -76,6 +76,7 @@ object JumpAdHooks {
     private const val KEY_HIDE_CONTENT_MEMBER_MASK = "hide_content_member_mask"
     private const val KEY_BLOCK_CLIPBOARD = "block_clipboard"
     private const val KEY_ENABLE_DEBUG_LOG = "enable_debug_log"
+    private const val KEY_RESTORE_POST_YEAR = "restore_post_year"
 
     // Byazt SDK 内部常量
     private const val KEY_EVENT_CODE = -0x5f5e0f3
@@ -156,6 +157,14 @@ object JumpAdHooks {
     @Volatile
     private var currentActivityName = ""
     private var targetClassLoader: ClassLoader? = null
+
+    // 帖子完整发布日期缓存：contentId -> 带年份的完整 postTimeStr（如 "2025-11-28"）
+    // 在列表点击跳转详情页之前写入，详情页显示时间时优先读取，实现"补回被服务器截断的年份"。
+    // 容量上限防止无限增长（长时间使用后内存占用可控），超限时清空重建。
+    private val postDateCache = java.util.Collections.synchronizedMap(LinkedHashMap<String, String>())
+    private const val POST_DATE_CACHE_MAX_SIZE = 500
+    // 详情页 Intent 里可能用来传递内容 ID 的候选 key 名，不同入口场景可能不完全一致
+    private val INTENT_ID_KEYS = listOf("content_id", "evaluate_id", "evaluateId", "postId", "id", "topic_id", "topicId")
 
     // ==================== 入口 ====================
 
@@ -461,6 +470,7 @@ object JumpAdHooks {
 
     private fun hookDataLayer(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookBrvAdapters(lpparam)
+        hookJqAdapter(lpparam)
     }
 
     private fun findBrvAdapterClass(classLoader: ClassLoader): Class<*>? {
@@ -538,6 +548,34 @@ object JumpAdHooks {
                             collapseView(itemView)
                             (itemView.parent as? View)?.requestLayout()
                         }
+
+                        // 4. 帖子年份缓存写入：列表渲染每条卡片时，顺手把完整 postTimeStr 存起来，
+                        // 供详情页在年份被服务器截断时找回。写入时机选在渲染阶段而不是点击跳转时，
+                        // 是因为统一跳转终点 ec7.A 本身不携带 postTimeStr 字段，早存比事后现拿更可靠。
+                        if (isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) {
+                            try {
+                                val model = try {
+                                    XposedHelpers.callMethod(holder, "e")
+                                } catch (_: Exception) {
+                                    null
+                                }
+                                if (model != null && model.javaClass.name.contains("UserContentItem")) {
+                                    val contentId = safeCallStringGetter(model, "getContentId")
+                                    val postTimeStr = safeCallStringGetter(model, "getPostTimeStr")
+                                    if (!contentId.isNullOrBlank() && !postTimeStr.isNullOrBlank()) {
+                                        synchronized(postDateCache) {
+                                            if (postDateCache.size >= POST_DATE_CACHE_MAX_SIZE) {
+                                                postDateCache.clear()
+                                            }
+                                            postDateCache[contentId] = postTimeStr
+                                        }
+                                        log("✔ [年份缓存] 写入 contentId=$contentId postTimeStr=$postTimeStr")
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                logError("年份缓存写入异常", e)
+                            }
+                        }
                     } catch (e: Exception) {
                         logError("BRV onBindViewHolder 过滤异常", e)
                     }
@@ -548,6 +586,76 @@ object JumpAdHooks {
             log("✔ BRV 极速单点广告与热议过滤 Hook 已就绪")
         } catch (e: Exception) {
             logError("✘ BRV Adapter Hook 失败", e)
+        }
+    }
+
+    /**
+     * 评测列表专用年份缓存写入。
+     *
+     * 定位过程历经两轮：
+     * 第一轮真机堆栈看到 jq.onCreateViewHolder，误以为 jq 本身就是评测列表的适配器，
+     * hook 了 jq.onBindViewHolder，但 jq（对应反编译中的 Ljq;）实际上只是一个通用父类
+     * （com.chad.library.adapter.base.BaseQuickAdapter 体系），onBindViewHolder 在父类
+     * 里没有具体实现，真正干活的绑定方法在子类里被覆写成了单字母方法名，父类挂 hook
+     * 永远等不到调用。
+     * 第二轮通过反编译交叉搜索 Ljq; 的子类，确认评测列表真正使用的适配器是 Lz52;
+     * （Ljq; 的直接子类），绑定方法是 D(BaseViewHolder, TopicDiscuss)，不叫
+     * onBindViewHolder。数据类型也不是此前"社区/首页"用的 UserContentItem，
+     * 而是 TopicDiscuss，这个类型自带原始时间戳字段 time（Long），比之前"从渲染文字
+     * 反推日期"的迂回方式更直接可靠，可以精确格式化，不用依赖正则从 UI 文字里抠数字。
+     */
+    private fun hookJqAdapter(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            val evaluateAdapterClass = XposedHelpers.findClassIfExists("z52", lpparam.classLoader) ?: return
+
+            XposedBridge.hookAllMethods(evaluateAdapterClass, "D", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    if (!isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) return
+                    try {
+                        // 签名: D(BaseViewHolder holder, TopicDiscuss item)
+                        val item = param.args.getOrNull(1) ?: return
+                        if (!item.javaClass.name.contains("TopicDiscuss")) return
+
+                        val postId = safeCallStringGetter(item, "getPostId")
+                        val topicId = safeCallStringGetter(item, "getTopicId")
+                        // 官方在这个场景实际用来 setText 的字段是 postTimeStr（已格式化好的字符串），
+                        // 不是 time（原始时间戳）——反编译交叉验证过 z52.D 内部只读取 postTimeStr，
+                        // time 字段在这里可能始终为空，之前误用 getTime() 导致每次都在判空这一步
+                        // 提前 return，缓存从未真正写入过。
+                        val postTimeStr = safeCallStringGetter(item, "getPostTimeStr")
+                        if (postTimeStr.isNullOrBlank()) return
+                        // 只有 postTimeStr 本身已经带完整年份（4位数字开头）才有缓存价值；
+                        // 如果这条评测是"今年"发布的，官方连列表卡片上显示的都是残缺的
+                        // "MM-dd"，数据源头本身就没有更完整的信息，缓存这个值没有意义。
+                        if (!Regex("""^\d{4}-""").containsMatchIn(postTimeStr)) return
+
+                        val fullDate = postTimeStr
+
+                        var boundCount = 0
+                        synchronized(postDateCache) {
+                            if (postDateCache.size >= POST_DATE_CACHE_MAX_SIZE) {
+                                postDateCache.clear()
+                            }
+                            if (!postId.isNullOrBlank()) {
+                                postDateCache[postId] = fullDate
+                                boundCount++
+                            }
+                            if (!topicId.isNullOrBlank() && topicId != postId) {
+                                postDateCache[topicId] = fullDate
+                                boundCount++
+                            }
+                        }
+                        if (boundCount > 0) {
+                            log("✔ [评测年份缓存] 写入 postId=$postId topicId=$topicId date=$fullDate")
+                        }
+                    } catch (e: Exception) {
+                        logError("评测年份缓存写入异常", e)
+                    }
+                }
+            })
+            log("✔ 评测列表适配器（z52.D）年份缓存 Hook 已安装")
+        } catch (e: Exception) {
+            logError("✘ 评测列表适配器 Hook 失败", e)
         }
     }
 
@@ -741,6 +849,7 @@ object JumpAdHooks {
         hookAdViews(lpparam)
         hookContentDetailMemberMask(lpparam)
         hookContentDetailScrollUnlock(lpparam)
+        hookPostDateCacheRead(lpparam)
     }
 
     private fun hookMainActivityUI(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -1002,6 +1111,108 @@ object JumpAdHooks {
         log("✔ 详情页滚动解锁 Hook 已安装")
     }
 
+    /**
+     * 读取点：详情页 TextView 被设置文字内容的那一刻，若能查到缓存的完整日期，直接替换后再渲染。
+     *
+     * 反编译定位历经三轮纠错：
+     * 第一轮误判为 ui.content.generalinterest.detail.b;->G —— 真机堆栈证实该方法绑定的是完全
+     * 不同的 "InterestCommunityDetailActivity"，从未被触发。
+     * 第二轮改用 ContentDetailActivity.initData() 之后再延迟轮询查找 View 覆盖，"社区/首页"能命中，
+     * 但存在两个问题：一是轮询假设了官方一定会用 "MM-dd 地区" 格式（用 ^ 锚点匹配开头日期），
+     * 结果原文其实带有"更新于"前缀，日期不在字符串开头，锚点判断错误导致完全不生效；
+     * 二是"游戏评测"入口的列表实测走的是独立的原生适配器 jq，不是 BRV 体系，此前写入逻辑
+     * 从未覆盖到这条路径，缓存里根本没有这些数据，自然无法命中。
+     * 第三轮改为直接 hook TextView.setText 本身：不再猜测数据加载完成的时机，
+     * 也不再依赖 Intent 里 content_id 一定是 String 类型（真机实测过 Bundle 里其实是
+     * Long/Int 类型，getStringExtra 直接返回 null，一直命中失败），改用 Bundle.get(key) 兼容
+     * String/Long/Int 三种可能的类型。
+     *
+     * 缓存未命中（比如从推送/分享直接进入详情页，没有经过列表滑动渲染）时不做任何改动，
+     * 维持官方原本的残缺显示，不强求、不报错。
+     */
+    private fun hookPostDateCacheRead(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                TextView::class.java, "setText",
+                CharSequence::class.java, TextView.BufferType::class.java,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (!isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) return
+                        try {
+                            val tv = param.thisObject as? TextView ?: return
+                            val context = tv.context ?: return
+                            if (context !is Activity) return
+
+                            // 先用已有的 currentActivityName 状态做一次廉价判断，
+                            // 避免对无关页面的每一次 setText 都做资源 ID 查询和反射
+                            if (!currentActivityName.contains("ContentDetailActivity") &&
+                                !currentActivityName.contains("GameDetailActivity")
+                            ) return
+
+                            val tvDateId = getCachedResId(context, "tvDate")
+                            if (tvDateId == 0 || tv.id != tvDateId) return
+
+                            val incoming = param.args.getOrNull(0) as? CharSequence ?: return
+                            val incomingText = incoming.toString()
+                            if (incomingText.isBlank()) return
+
+                            var newText = incomingText
+
+                            // 兼容 Intent extras 里 content_id 可能是 String/Long/Int 任意一种类型，
+                            // 依次尝试候选 key 名，只要拿到非空值就用它去查缓存
+                            var targetId: String? = null
+                            val extras = context.intent?.extras
+                            if (extras != null) {
+                                for (key in INTENT_ID_KEYS) {
+                                    val v = extras.get(key) ?: continue
+                                    val s = v.toString().trim()
+                                    if (s.isNotEmpty() && s != "0" && s != "null") {
+                                        targetId = s
+                                        break
+                                    }
+                                }
+                            }
+
+                            if (targetId != null) {
+                                val cachedDate = synchronized(postDateCache) { postDateCache[targetId] }
+                                // 已经带 4 位年份的不重复处理，只在确认是残缺格式时替换
+                                if (cachedDate != null && !newText.contains(Regex("""\b\d{4}\b"""))) {
+                                    val datePattern = Regex("""\d{2}-\d{2}""")
+                                    if (datePattern.containsMatchIn(newText)) {
+                                        newText = newText.replaceFirst(datePattern, Regex.escapeReplacement(cachedDate))
+                                    }
+                                }
+                            }
+
+                            // 官方在此处偶尔会内嵌图文占位符，直接读取文本时会带出字面量 "image"，一并清理
+                            if (newText.contains("image", ignoreCase = true)) {
+                                newText = newText.replace(Regex("""(?i)\s*image"""), "").trim()
+                            }
+
+                            if (newText != incomingText) {
+                                param.args[0] = newText
+                                log("✔ [年份缓存] 拦截渲染: $incomingText -> $newText")
+                            }
+                        } catch (e: Exception) {
+                            logError("年份缓存读取异常", e)
+                        }
+                    }
+                }
+            )
+            log("✔ 帖子年份缓存读取 Hook 已安装")
+        } catch (e: Exception) {
+            logError("✘ 帖子年份缓存读取 Hook 失败", e)
+        }
+    }
+
+    private fun safeCallStringGetter(obj: Any, methodName: String): String? {
+        return try {
+            XposedHelpers.callMethod(obj, methodName) as? String
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     // ============================================================
     // 第 5 层：入口挂载（原生设置页置顶内嵌 + 长按快捷入口）
     // ============================================================
@@ -1015,6 +1226,8 @@ object JumpAdHooks {
             "com.vgjump.jump.bean.my.SettingItem", lpparam.classLoader
         ) ?: return
 
+        // 1. 插入自定义条目：调用官方自己的 Ljq.c(Object) 追加方法，
+        //    比反射操作 List 字段更贴近官方实现，出错概率更低。
         XposedBridge.hookAllMethods(settingActivityClass, "initData", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 try {
@@ -1038,53 +1251,92 @@ object JumpAdHooks {
                         null
                     )
 
+                    // 先检查是否已存在，避免重复插入（对应官方 adapter 的 f 字段）
                     @Suppress("UNCHECKED_CAST")
-                    val dataList = XposedHelpers.getObjectField(adapter, "f") as? MutableList<Any>
-                    if (dataList != null && !dataList.contains(customItem)) {
-                        dataList.add(0, customItem)
-                        XposedHelpers.callMethod(adapter, "notifyItemInserted", 0)
+                    val dataList = XposedHelpers.getObjectField(adapter, "f") as? List<Any>
+                    val alreadyExists = dataList?.any { item ->
+                        try {
+                            XposedHelpers.callMethod(item, "getTitle") as? String == SETTING_ITEM_TITLE
+                        } catch (_: Exception) {
+                            false
+                        }
+                    } ?: false
+
+                    if (!alreadyExists) {
+                        // 官方每插入一条设置项都是调用这个方法，而不是手动操作 List + notifyItemInserted
+                        XposedHelpers.callMethod(adapter, "c", customItem)
                     }
+
+                    hookAdapterBindForSettingsEntry(adapter.javaClass)
                 } catch (e: Exception) {
                     logError("向设置页插入条目失败", e)
                 }
             }
         })
 
-        val candidateClickListenerNames = listOf(
-            "vq", "e92", "d92", "f92", "wq", "xq", "yq", "zq",
-            "a83", "b83", "c83", "uq", "tq", "yv2"
-        )
-        val clickHook = object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
+        // 2. 点击拦截：不再猜测混淆的点击分发合成类（每次编译几乎必然改名），
+        //    改为 hook 标准 RecyclerView.Adapter 生命周期方法 onBindViewHolder，
+        //    在绑定阶段通过未混淆的 SettingItem.getTitle() 识别出自定义条目，
+        //    直接给这一行的 itemView 挂点击监听器，完全绕开官方内部的分发逻辑。
+        XposedBridge.hookAllMethods(settingActivityClass, "s", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
                 try {
-                    val adapter = param.args.getOrNull(0) ?: return
-                    val position = param.args.getOrNull(2) as? Int ?: return
-
-                    val dataList = XposedHelpers.getObjectField(adapter, "f") as? List<*> ?: return
-                    val clickedItem = dataList.getOrNull(position) ?: return
-
-                    val title = XposedHelpers.callMethod(clickedItem, "getTitle") as? String
-                    if (title == SETTING_ITEM_TITLE) {
-                        param.result = null
-                        val view = param.args.getOrNull(1) as? View
-                        val context = view?.context ?: return
-                        if (context is Activity) {
-                            showFullscreenSettings(context)
-                        }
-                    }
+                    val adapter = param.result ?: return
+                    hookAdapterBindForSettingsEntry(adapter.javaClass)
                 } catch (e: Exception) {
-                    logError("设置项点击拦截异常", e)
+                    logError("挂载设置项点击拦截失败", e)
                 }
             }
+        })
+    }
+
+    private val hookedSettingAdapters = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Class<*>, Boolean>())
+
+    private fun hookAdapterBindForSettingsEntry(adapterClass: Class<*>) {
+        // 避免对同一个 adapter 类重复挂 hook
+        synchronized(hookedSettingAdapters) {
+            if (hookedSettingAdapters.contains(adapterClass)) return
+            hookedSettingAdapters.add(adapterClass)
         }
 
-        for (clsName in candidateClickListenerNames) {
-            val targetClass = XposedHelpers.findClassIfExists(clsName, lpparam.classLoader)
-            if (targetClass != null) {
-                try {
-                    XposedBridge.hookAllMethods(targetClass, "a", clickHook)
-                } catch (_: Exception) {}
-            }
+        try {
+            XposedBridge.hookAllMethods(adapterClass, "onBindViewHolder", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    try {
+                        val args = param.args
+                        if (args.size < 2) return
+                        val holder = args[0] ?: return
+                        val position = args[1] as? Int ?: return
+
+                        val itemView = XposedHelpers.getObjectField(holder, "itemView") as? View ?: return
+
+                        @Suppress("UNCHECKED_CAST")
+                        val dataList = XposedHelpers.getObjectField(param.thisObject, "f") as? List<Any> ?: return
+                        val item = dataList.getOrNull(position) ?: return
+
+                        val title = try {
+                            XposedHelpers.callMethod(item, "getTitle") as? String
+                        } catch (_: Exception) { null }
+
+                        if (title == SETTING_ITEM_TITLE) {
+                            itemView.setOnClickListener {
+                                val context = itemView.context
+                                if (context is Activity) {
+                                    showFullscreenSettings(context)
+                                }
+                            }
+                        } else {
+                            itemView.setOnClickListener(null)
+                            itemView.isClickable = false
+                        }
+                    } catch (e: Exception) {
+                        logError("设置项绑定拦截异常", e)
+                    }
+                }
+            })
+            log("✔ 设置页点击拦截（Title 锚点 + 复用重置）已就绪: ${adapterClass.name}")
+        } catch (e: Exception) {
+            logError("✘ 设置页点击拦截安装失败", e)
         }
     }
 
@@ -1141,6 +1393,7 @@ object JumpAdHooks {
 
             SectionHeader("内容与详情"),
             SettingItem(KEY_ENABLE_COPY, "解除文本复制限制"),
+            SettingItem(KEY_RESTORE_POST_YEAR, "还原帖子完整年份", desc = "仅对从列表点入的帖子生效，直接进入可能无效"),
             SettingItem(KEY_HIDE_CONTENT_MEMBER_MASK, "解锁游戏评价总结"),
 
             SectionHeader("个人中心"),
@@ -1771,6 +2024,7 @@ object JumpAdHooks {
             KEY_ENABLE_COPY,
             KEY_HIDE_CONTENT_MEMBER_MASK,
             KEY_BLOCK_CLIPBOARD,
+            KEY_RESTORE_POST_YEAR,
             KEY_ENABLE_DEBUG_LOG -> false
 
             else -> false
