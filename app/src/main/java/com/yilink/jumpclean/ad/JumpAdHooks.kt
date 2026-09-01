@@ -900,7 +900,6 @@ object JumpAdHooks {
             "rvOpt" to KEY_HIDE_TOPIC_LIST,
             "ivPublishTopic" to KEY_HIDE_PUBLISH_TOPIC,
             "clPhotoWall" to KEY_HIDE_PHOTO_WALL,
-            "clContent" to KEY_HIDE_MEMBER_CARD,
             "vColorRVTop" to KEY_HIDE_MEMBER_CARD,
             "vBlackRVTop" to KEY_HIDE_MEMBER_CARD,
             "tvMyOrder" to KEY_HIDE_MY_ORDER,
@@ -920,6 +919,18 @@ object JumpAdHooks {
         if (activeTargetIds.isNotEmpty()) {
             activity.window?.decorView?.let { decorView ->
                 collapseTargetViews(decorView, activeTargetIds)
+            }
+        }
+
+        // 单独精准折叠 Jump+ 会员卡片：通过专属子控件 tvBuy 定位，绝不误伤其他 clContent 容器
+        if (isFeatureEnabled(activity, KEY_HIDE_MEMBER_CARD)) {
+            val buyBtnId = getCachedResId(activity, "tvBuy")
+            if (buyBtnId != 0) {
+                activity.findViewById<View>(buyBtnId)?.let { buyBtn ->
+                    (buyBtn.parent as? View)?.let { memberContainer ->
+                        collapseView(memberContainer)
+                    }
+                }
             }
         }
     }
@@ -1226,8 +1237,8 @@ object JumpAdHooks {
             "com.vgjump.jump.bean.my.SettingItem", lpparam.classLoader
         ) ?: return
 
-        // 1. 插入自定义条目：调用官方自己的 Ljq.c(Object) 追加方法，
-        //    比反射操作 List 字段更贴近官方实现，出错概率更低。
+        // 1. 插入自定义条目：调用官方自己的 Ljq.c(0, Object) 置顶插入方法，
+        //    直接放到列表第 0 位，比反射操作 List 字段更贴近官方实现，出错概率更低。
         XposedBridge.hookAllMethods(settingActivityClass, "initData", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 try {
@@ -1263,8 +1274,8 @@ object JumpAdHooks {
                     } ?: false
 
                     if (!alreadyExists) {
-                        // 官方每插入一条设置项都是调用这个方法，而不是手动操作 List + notifyItemInserted
-                        XposedHelpers.callMethod(adapter, "c", customItem)
+                        // 调用官方重载方法 c(0, item)，直接置顶到列表第 0 位
+                        XposedHelpers.callMethod(adapter, "c", 0, customItem)
                     }
 
                     hookAdapterBindForSettingsEntry(adapter.javaClass)
@@ -1393,7 +1404,7 @@ object JumpAdHooks {
 
             SectionHeader("内容与详情"),
             SettingItem(KEY_ENABLE_COPY, "解除文本复制限制"),
-            SettingItem(KEY_RESTORE_POST_YEAR, "还原帖子完整年份", desc = "仅对从列表点入的帖子生效，直接进入可能无效"),
+            SettingItem(KEY_RESTORE_POST_YEAR, "还原帖子完整年份"),
             SettingItem(KEY_HIDE_CONTENT_MEMBER_MASK, "解锁游戏评价总结"),
 
             SectionHeader("个人中心"),
