@@ -996,7 +996,8 @@ object JumpAdHooks {
             "ivTag" to KEY_HIDE_WIDGET_VIP_TAG
         )
 
-        val activeTargetIds = ArrayList<Int>()
+        // 改动 1：使用 HashSet 保存 ID，将递归中的匹配降为 O(1)
+        val activeTargetIds = HashSet<Int>()
         targets.forEach { (idName, prefKey) ->
             if (isFeatureEnabled(activity, prefKey)) {
                 getCachedResId(activity, idName).takeIf { it != 0 }?.let { activeTargetIds.add(it) }
@@ -1022,7 +1023,8 @@ object JumpAdHooks {
         }
     }
 
-    private fun collapseTargetViews(view: View, targetIds: ArrayList<Int>) {
+    // 改动 1（续）：入参类型改为 Set<Int>
+    private fun collapseTargetViews(view: View, targetIds: Set<Int>) {
         if (targetIds.contains(view.id)) {
             collapseView(view)
         }
@@ -1963,6 +1965,7 @@ object JumpAdHooks {
     // 内部工具方法
     // ============================================================
 
+    // 改动 2：只有当实际宽高非 0 时才修改并重设 layoutParams，防止打断渲染管线、杜绝冗余 requestLayout
     private fun collapseView(view: View, safeMode: Boolean = false) {
         if (view.visibility != View.GONE) view.visibility = View.GONE
         view.isEnabled = false
@@ -1972,7 +1975,7 @@ object JumpAdHooks {
         view.isFocusableInTouchMode = false
         if (!safeMode) {
             val params = view.layoutParams
-            if (params != null) {
+            if (params != null && (params.height != 0 || params.width != 0)) {
                 params.height = 0
                 params.width = 0
                 if (params is ViewGroup.MarginLayoutParams) {
