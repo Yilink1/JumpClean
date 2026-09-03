@@ -164,12 +164,12 @@ object JumpAdHooks {
     private var currentActivityName = ""
     private var targetClassLoader: ClassLoader? = null
 
-    // 帖子完整发布日期缓存：contentId -> 带年份的完整 postTimeStr（如 "2025-11-28"）
+    // 帖子完整发布日期缓存
     private val postDateCache = java.util.Collections.synchronizedMap(LinkedHashMap<String, String>())
     private const val POST_DATE_CACHE_MAX_SIZE = 500
     private val INTENT_ID_KEYS = listOf("content_id", "evaluate_id", "evaluateId", "postId", "id", "topic_id", "topicId")
 
-    // 内存安全拦截计数器（初始 -1 表示未从 SP 加载历史累计值）
+    // 内存安全拦截计数器
     private val blockedPromoCounter = AtomicInteger(-1)
     private var appContextRef: WeakReference<Context>? = null
 
@@ -489,7 +489,7 @@ object JumpAdHooks {
                 } catch (_: Throwable) {}
             }
 
-            // 渲染层仅保留原本的静态规则（不再做任何动态折叠与恢复，杜绝重排）
+            // 渲染层仅保留原本的静态规则
             val onBindHook = object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
@@ -878,7 +878,7 @@ object JumpAdHooks {
         if (act.contains("GameDetailActivity")) {
             return cls.contains("MyExpandableTextView") && text.length >= 10
         }
-        if (act.contains("ContentDetailActivity")) {
+        if (act.contains("ContentDetailActivity") || act.contains("CommentDetailActivity")) {
             return cls.contains("LineHeightTextView") || cls.contains("MyExpandableTextView")
         }
         return false
@@ -928,14 +928,13 @@ object JumpAdHooks {
     }
 
     // ============================================================
-    // 第 4 层：View 层 UI 净化
+    // 第 4 层：View 层 UI 净化（手术刀单点，零全局遍历）
     // ============================================================
 
     private fun hookViewLayer(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookMainActivityUI(lpparam)
         hookAdViews(lpparam)
         hookContentDetailMemberMask(lpparam)
-        hookContentDetailScrollUnlock(lpparam)
         hookPostDateCacheRead(lpparam)
     }
 
@@ -1010,7 +1009,7 @@ object JumpAdHooks {
             }
         }
 
-        // 单独精准折叠 Jump+ 会员卡片：通过专属子控件 tvBuy 定位，绝不误伤其他 clContent 容器
+        // 单独精准折叠 Jump+ 会员卡片
         if (isFeatureEnabled(activity, KEY_HIDE_MEMBER_CARD)) {
             val buyBtnId = getCachedResId(activity, "tvBuy")
             if (buyBtnId != 0) {
@@ -1086,131 +1085,71 @@ object JumpAdHooks {
     }
 
     private fun hookContentDetailMemberMask(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val clazz = XposedHelpers.findClassIfExists("com.vgjump.jump.ui.content.detail.ContentDetailActivity", lpparam.classLoader) ?: return
-        try {
-            XposedBridge.hookAllMethods(clazz, "onCreate", object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    try {
-                        val activity = param.thisObject as? Activity ?: return
-                        initAppContext(activity)
-                        applyContentDetailMemberMaskHide(activity)
+        // 双重覆盖：既拦截主帖详情页，也拦截带有总结的评论详情页
+        val targetActivities = listOf(
+            "com.vgjump.jump.ui.content.detail.ContentDetailActivity",
+            "com.vgjump.jump.ui.content.detail.CommentDetailActivity"
+        )
 
-                        // 恢复稳定带节流的全局布局监听，确保网络加载后弹出的遮罩无论何时都能被精准消除
-                        activity.window?.decorView?.rootView?.viewTreeObserver
-                            ?.addOnGlobalLayoutListener {
-                                val now = SystemClock.uptimeMillis()
-                                if (now - lastDetailLayoutTime >= THROTTLE_INTERVAL_MS) {
-                                    lastDetailLayoutTime = now
-                                    applyContentDetailMemberMaskHide(activity)
-                                }
+        val maskHook = object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                try {
+                    val activity = param.thisObject as? Activity ?: return
+                    initAppContext(activity)
+                    applyContentDetailMemberMaskHide(activity)
+
+                    activity.window?.decorView?.rootView?.viewTreeObserver
+                        ?.addOnGlobalLayoutListener {
+                            val now = SystemClock.uptimeMillis()
+                            if (now - lastDetailLayoutTime >= THROTTLE_INTERVAL_MS) {
+                                lastDetailLayoutTime = now
+                                applyContentDetailMemberMaskHide(activity)
                             }
-                    } catch (e: Exception) {
-                        logError("ContentDetailActivity onCreate 遮罩隐藏异常", e)
-                    }
+                        }
+                } catch (e: Exception) {
+                    logError("详情页遮罩初始化异常", e)
                 }
-            })
+            }
+        }
+
+        targetActivities.forEach { className ->
+            val clazz = XposedHelpers.findClassIfExists(className, lpparam.classLoader) ?: return@forEach
+            XposedBridge.hookAllMethods(clazz, "onCreate", maskHook)
             XposedBridge.hookAllMethods(clazz, "onResume", object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
-                    try {
-                        val activity = param.thisObject as? Activity ?: return
-                        initAppContext(activity)
-                        applyContentDetailMemberMaskHide(activity)
-                    } catch (e: Exception) {
-                        logError("ContentDetailActivity onResume 遮罩隐藏异常", e)
-                    }
+                    val activity = param.thisObject as? Activity ?: return
+                    applyContentDetailMemberMaskHide(activity)
                 }
             })
-            log("✔ 会员遮罩隐藏 Hook 已安装")
-        } catch (e: Exception) {
-            logError("✘ 会员遮罩隐藏 Hook 失败", e)
         }
+        log("✔ 游戏评价遮罩纯净单点 Hook 已就绪")
     }
 
+    /**
+     * 极速单点消除：纯 ID 直取，0 递归，0 反射，0 掉帧
+     */
     private fun applyContentDetailMemberMaskHide(activity: Activity) {
         if (!isFeatureEnabled(activity, KEY_HIDE_CONTENT_MEMBER_MASK)) return
         try {
-            val decorView = activity.window?.decorView ?: return
-            val targetIds = ArrayList<Int>()
-            listOf("llMemberTry", "vMemberMask", "vMemberChildMask", "ivMemberMask", "clMemberContainer").forEach { idName ->
-                getCachedResId(activity, idName).takeIf { it != 0 }?.let { targetIds.add(it) }
+            // clMemberMask 直接涵盖 3008px 挡板及其名下所有渐变/拦截子控件；llMemberTry 涵盖试用引导大卡片
+            val targetMaskNames = listOf(
+                "clMemberMask",
+                "llMemberTry",
+                "vMemberMask",
+                "vMemberChildMask",
+                "ivMemberMask",
+                "clMemberContainer"
+            )
+
+            for (idName in targetMaskNames) {
+                val resId = getCachedResId(activity, idName)
+                if (resId != 0) {
+                    activity.findViewById<View>(resId)?.let { collapseView(it) }
+                }
             }
-            if (targetIds.isNotEmpty()) collapseTargetViews(decorView, targetIds)
-            releaseContentDetailTouchBlockers(decorView)
         } catch (e: Exception) {
             logError("会员遮罩隐藏失败", e)
         }
-    }
-
-    private fun releaseContentDetailTouchBlockers(root: View) {
-        try {
-            releaseContentDetailTouchBlockersRecursive(root)
-        } catch (e: Exception) {
-            logError("触摸拦截释放失败", e)
-        }
-    }
-
-    private fun releaseContentDetailTouchBlockersRecursive(view: View) {
-        try {
-            val idName = try {
-                if (view.id != View.NO_ID) view.resources.getResourceEntryName(view.id) else ""
-            } catch (_: Exception) { "" }
-            val cls = view.javaClass.name
-            val visible = view.visibility == View.VISIBLE
-
-            val nameLooksMember = idName.contains("member", true) ||
-                    idName.contains("mask", true) || idName.contains("vip", true) ||
-                    idName.contains("try", true) || cls.contains("BlurView", true)
-
-            val looksLikeBottomBlocker = visible &&
-                    view.width > 800 && view.height in 100..700 &&
-                    view.id == View.NO_ID &&
-                    (cls.contains("AppCompatImageView") || cls.contains("ImageView"))
-
-            if (nameLooksMember || looksLikeBottomBlocker) {
-                view.isEnabled = false
-                view.isClickable = false
-                view.isLongClickable = false
-                view.isFocusable = false
-                view.isFocusableInTouchMode = false
-                collapseView(view)
-            }
-
-            if (view is ViewGroup) {
-                view.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
-                for (i in 0 until view.childCount) {
-                    releaseContentDetailTouchBlockersRecursive(view.getChildAt(i))
-                }
-            }
-        } catch (_: Exception) {}
-    }
-
-    private fun hookContentDetailScrollUnlock(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val scrollClasses = listOf(
-            "androidx.recyclerview.widget.RecyclerView",
-            "androidx.core.widget.NestedScrollView",
-            "androidx.viewpager2.widget.ViewPager2"
-        )
-        scrollClasses.forEach { className ->
-            try {
-                val clazz = XposedHelpers.findClassIfExists(className, lpparam.classLoader) ?: return@forEach
-                val methodName = if (className.contains("ViewPager2")) "setUserInputEnabled" else "setNestedScrollingEnabled"
-                XposedBridge.hookAllMethods(clazz, methodName, object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        try {
-                            if (!currentActivityName.contains("ContentDetailActivity")) return
-                            val view = param.thisObject as? View ?: return
-                            if (!isFeatureEnabled(view.context, KEY_HIDE_CONTENT_MEMBER_MASK)) return
-                            param.args[0] = true
-                        } catch (e: Exception) {
-                            logError("滚动解锁异常 (${className})", e)
-                        }
-                    }
-                })
-            } catch (e: Exception) {
-                logError("滚动解锁 Hook 失败 (${className})", e)
-            }
-        }
-        log("✔ 详情页滚动解锁 Hook 已安装")
     }
 
     private fun hookPostDateCacheRead(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -1227,6 +1166,7 @@ object JumpAdHooks {
                             if (context !is Activity) return
 
                             if (!currentActivityName.contains("ContentDetailActivity") &&
+                                !currentActivityName.contains("CommentDetailActivity") &&
                                 !currentActivityName.contains("GameDetailActivity")
                             ) return
 
