@@ -38,7 +38,10 @@ import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.io.File
+import java.lang.ref.WeakReference
+import java.lang.reflect.Field
 import java.util.ArrayList
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Function
 
 /**
@@ -74,9 +77,12 @@ object JumpAdHooks {
     private const val KEY_HIDE_WIDGET_VIP_TAG = "hide_widget_vip_tag"
     private const val KEY_ENABLE_COPY = "enable_article_copy"
     private const val KEY_HIDE_CONTENT_MEMBER_MASK = "hide_content_member_mask"
-    private const val KEY_BLOCK_CLIPBOARD = "block_clipboard"
     private const val KEY_ENABLE_DEBUG_LOG = "enable_debug_log"
     private const val KEY_RESTORE_POST_YEAR = "restore_post_year"
+
+    // 实验性功能 Key
+    private const val KEY_EXP_BLOCK_OFFICIAL_PROMO_POST = "exp_block_official_promo_post"
+    private const val KEY_BLOCKED_OFFICIAL_PROMO_COUNT = "blocked_official_promo_count"
 
     // Byazt SDK 内部常量
     private const val KEY_EVENT_CODE = -0x5f5e0f3
@@ -163,6 +169,33 @@ object JumpAdHooks {
     private const val POST_DATE_CACHE_MAX_SIZE = 500
     private val INTENT_ID_KEYS = listOf("content_id", "evaluate_id", "evaluateId", "postId", "id", "topic_id", "topicId")
 
+    // 内存安全拦截计数器（初始 -1 表示未从 SP 加载历史累计值）
+    private val blockedPromoCounter = AtomicInteger(-1)
+    private var appContextRef: WeakReference<Context>? = null
+
+    // 反射 Field 静态缓存（指针复用）
+    @Volatile
+    private var fieldAdType: Field? = null
+    @Volatile
+    private var fieldAdId: Field? = null
+    @Volatile
+    private var fieldContentId: Field? = null
+    @Volatile
+    private var fieldJumpJson: Field? = null
+
+    // SP 异步防抖 Handler
+    private val debounceHandler by lazy { Handler(Looper.getMainLooper()) }
+    private val saveCounterRunnable = Runnable {
+        val app = getValidAppContext() ?: return@Runnable
+        val total = blockedPromoCounter.get()
+        if (total >= 0) {
+            app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putInt(KEY_BLOCKED_OFFICIAL_PROMO_COUNT, total)
+                .apply()
+        }
+    }
+
     // ==================== 入口 ====================
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -192,7 +225,6 @@ object JumpAdHooks {
         hookSplashAdBase(lpparam)
         hookStartupDelayCompress(lpparam)
         hookActivityFlowProbe()
-        hookBlockClipboard(lpparam)
         hookFakeNotificationPermission(lpparam)
     }
 
@@ -204,6 +236,7 @@ object JumpAdHooks {
         XposedBridge.hookAllMethods(splashClass, "onCreate", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 val activity = param.thisObject as? Activity ?: return
+                initAppContext(activity)
                 val isRestartFromIcon = activity.intent?.getBooleanExtra(EXTRA_ICON_RESTART, false) == true
                 val isSkipEnabled = isFeatureEnabledSafe(lpparam.classLoader, KEY_SKIP_SPLASH)
 
@@ -349,6 +382,7 @@ object JumpAdHooks {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val act = param.thisObject as? Activity ?: return
+                        initAppContext(act)
                         val name = act.javaClass.name
                         if (name.contains("MainActivity")) {
                             mainActivitySeen = true
@@ -360,69 +394,13 @@ object JumpAdHooks {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val act = param.thisObject as? Activity ?: return
+                        initAppContext(act)
                         currentActivityName = act.javaClass.name
                     } catch (_: Exception) {}
                 }
             })
         } catch (e: Exception) {
             logError("✘ Activity 生命周期探针失败", e)
-        }
-    }
-
-    private fun isUserPasteAction(): Boolean {
-        return try {
-            val stackTrace = Thread.currentThread().stackTrace
-            val checkDepth = minOf(stackTrace.size, 25)
-            for (i in 0 until checkDepth) {
-                val element = stackTrace[i]
-                val className = element.className
-                val methodName = element.methodName
-
-                if (className.startsWith("android.widget.Editor") ||
-                    className.startsWith("android.widget.TextView") ||
-                    className.contains("SelectActionModeCallback") ||
-                    className.contains("chromium", true) ||
-                    methodName == "onTextContextMenuItem" ||
-                    methodName == "paste"
-                ) {
-                    return true
-                }
-            }
-            false
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun hookBlockClipboard(lpparam: XC_LoadPackage.LoadPackageParam) {
-        try {
-            val clipboardManagerClass = XposedHelpers.findClass("android.content.ClipboardManager", lpparam.classLoader)
-
-            val contentHook = object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    if (isFeatureEnabledSafe(lpparam.classLoader, KEY_BLOCK_CLIPBOARD)) {
-                        if (!isUserPasteAction()) {
-                            param.result = null
-                        }
-                    }
-                }
-            }
-            XposedHelpers.findAndHookMethod(clipboardManagerClass, "getPrimaryClip", contentHook)
-            XposedHelpers.findAndHookMethod(clipboardManagerClass, "getText", contentHook)
-
-            XposedHelpers.findAndHookMethod(clipboardManagerClass, "hasPrimaryClip", object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    if (isFeatureEnabledSafe(lpparam.classLoader, KEY_BLOCK_CLIPBOARD)) {
-                        if (!isUserPasteAction()) {
-                            param.result = false
-                        }
-                    }
-                }
-            })
-
-            log("✔ 剪贴板读保护（支持主动粘贴且防闪退）Hook 已安装")
-        } catch (e: Exception) {
-            logError("✘ 剪贴板保护 Hook 失败", e)
         }
     }
 
@@ -457,7 +435,7 @@ object JumpAdHooks {
     }
 
     // ============================================================
-    // 第 2 层：数据/渲染层 Hook（单点直击 Header、广告与 Jumper 热议）
+    // 第 2 层：数据/渲染层 Hook
     // ============================================================
 
     private fun hookDataLayer(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -484,14 +462,43 @@ object JumpAdHooks {
                 return
             }
 
+            // 数据源头物理剔除：压根不进列表，从根源杜绝掉帧与占位
+            val filterDataHook = object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    if (!isFeatureEnabledSafe(lpparam.classLoader, KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)) return
+                    try {
+                        val rawList = param.args.getOrNull(0) ?: return
+                        if (rawList is MutableList<*>) {
+                            filterPromoList(rawList)
+                        } else if (rawList is List<*>) {
+                            val mutableCopy = ArrayList(rawList)
+                            if (filterPromoList(mutableCopy)) {
+                                param.args[0] = mutableCopy
+                            }
+                        }
+                    } catch (e: Exception) {
+                        logError("BRV 数据源拦截过滤异常", e)
+                    }
+                }
+            }
+
+            val dataMethods = listOf("setModels", "addModels", "setMModels", "setList")
+            dataMethods.forEach { methodName ->
+                try {
+                    XposedBridge.hookAllMethods(adapterClass, methodName, filterDataHook)
+                } catch (_: Throwable) {}
+            }
+
+            // 渲染层仅保留原本的静态规则（不再做任何动态折叠与恢复，杜绝重排）
             val onBindHook = object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val holder = param.args.getOrNull(0) ?: return
                         val itemView = XposedHelpers.getObjectField(holder, "itemView") as? View ?: return
                         val context = itemView.context ?: return
+                        initAppContext(context)
 
-                        // 0. Jump+ 会员卡片：在 BRV 渲染绑定瞬间精准折叠，彻底根除后置监听导致的闪烁
+                        // 0. Jump+ 会员卡片折叠
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_MEMBER_CARD)) {
                             val buyBtnId = getCachedResId(context, "tvBuy")
                             if (buyBtnId != 0 && itemView.findViewById<View>(buyBtnId) != null) {
@@ -527,7 +534,7 @@ object JumpAdHooks {
                             }
                         }
 
-                        // 2. Jumper 热议模块：通过布局名或专属组件 ID (flAllTopic / clIndicator) 精准折叠
+                        // 2. Jumper 热议模块
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_HOT_DISCUSS)) {
                             val allTopicId = getCachedResId(context, "flAllTopic")
                             val indicatorId = getCachedResId(context, "clIndicator")
@@ -537,17 +544,15 @@ object JumpAdHooks {
 
                             if (isHotDiscussItem) {
                                 collapseView(itemView)
-                                (itemView.parent as? View)?.requestLayout()
                                 log("✔ [Jumper 热议] 成功命中并彻底折叠热议卡片: $resName")
                                 return
                             }
                         }
 
-                        // 3. 信息流推荐内嵌广告：折叠广告 Item
+                        // 3. 信息流推荐内嵌广告
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_POST_AD) && resName in POST_AD_LAYOUT_NAMES) {
                             log("✔ [信息流广告] 成功命中并折叠 Layout: $resName")
                             collapseView(itemView)
-                            (itemView.parent as? View)?.requestLayout()
                         }
 
                         // 4. 帖子年份缓存写入
@@ -582,10 +587,112 @@ object JumpAdHooks {
             }
 
             XposedBridge.hookAllMethods(adapterClass, "onBindViewHolder", onBindHook)
-            log("✔ BRV 极速单点广告与热议过滤 Hook 已就绪")
+            log("✔ BRV 极速数据源物理剔除与过滤 Hook 已就绪")
         } catch (e: Exception) {
             logError("✘ BRV Adapter Hook 失败", e)
         }
+    }
+
+    private fun filterPromoList(list: MutableList<*>): Boolean {
+        var modified = false
+        val iterator = list.iterator()
+        while (iterator.hasNext()) {
+            val item = iterator.next() ?: continue
+            if (isOfficialPromoModel(item)) {
+                iterator.remove()
+                modified = true
+                recordOfficialPromoBlockedDirect(item)
+            }
+        }
+        return modified
+    }
+
+    private fun isOfficialPromoModel(model: Any): Boolean {
+        if (!model.javaClass.name.contains("UserContentItem")) return false
+        return try {
+            val clazz = model.javaClass
+
+            // 首次命中时抓取并缓存 Field 对象，后续直接走指针读取
+            if (fieldAdType == null) {
+                fieldAdType = findFieldRecursively(clazz, "adType")
+                fieldAdId = findFieldRecursively(clazz, "adId")
+                fieldContentId = findFieldRecursively(clazz, "contentId")
+                fieldJumpJson = findFieldRecursively(clazz, "jumpJson")
+            }
+
+            val adType = fieldAdType?.get(model)?.toString()?.toIntOrNull() ?: 0
+            val adId = fieldAdId?.get(model)?.toString()?.toLongOrNull() ?: 0L
+            val contentId = fieldContentId?.get(model)?.toString()?.toLongOrNull() ?: 0L
+            val jumpJson = fieldJumpJson?.get(model)?.toString() ?: ""
+
+            // 强特征：带广告类型 8、负数 adId 或伪造的负数 contentId
+            val isPromoFlag = (adType == 8 || adId < 0L || contentId < 0L)
+            // 载荷特征：带有游戏商店、周边商城或营销外链导流
+            val hasPromoPayload = jumpJson.contains("gameId") ||
+                    jumpJson.contains("goodsId") ||
+                    jumpJson.contains("mall") ||
+                    jumpJson.contains("url")
+
+            isPromoFlag && (hasPromoPayload || contentId < 0L)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun findFieldRecursively(clazz: Class<*>, fieldName: String): Field? {
+        var cur: Class<*>? = clazz
+        while (cur != null && cur != Any::class.java) {
+            try {
+                val field = cur.getDeclaredField(fieldName)
+                field.isAccessible = true
+                return field
+            } catch (_: NoSuchFieldException) {
+                cur = cur.superclass
+            }
+        }
+        return null
+    }
+
+    private fun initAppContext(context: Context) {
+        if (appContextRef?.get() == null) {
+            appContextRef = WeakReference(context.applicationContext)
+        }
+    }
+
+    private fun getValidAppContext(): Context? {
+        appContextRef?.get()?.let { return it }
+        return try {
+            val activityThread = XposedHelpers.findClass("android.app.ActivityThread", targetClassLoader)
+            (XposedHelpers.callStaticMethod(activityThread, "currentApplication") as? Context)?.also {
+                appContextRef = WeakReference(it)
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun recordOfficialPromoBlockedDirect(model: Any) {
+        try {
+            val content = safeCallStringGetter(model, "getContent")
+                ?: XposedHelpers.getObjectField(model, "content")?.toString() ?: ""
+            val adId = XposedHelpers.getObjectField(model, "adId")?.toString() ?: ""
+            log("✔ [数据层剔除] 物理移除 Jump小酱推广帖子: adId=$adId, content=$content")
+
+            val app = getValidAppContext() ?: return
+
+            // 首次读取初始化
+            if (blockedPromoCounter.get() == -1) {
+                val sp = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                blockedPromoCounter.set(sp.getInt(KEY_BLOCKED_OFFICIAL_PROMO_COUNT, 0))
+            }
+
+            // 内存纳秒级自增
+            blockedPromoCounter.incrementAndGet()
+
+            // 1000ms 防抖异步落盘
+            debounceHandler.removeCallbacks(saveCounterRunnable)
+            debounceHandler.postDelayed(saveCounterRunnable, 1000L)
+        } catch (_: Throwable) {}
     }
 
     private fun hookJqAdapter(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -817,7 +924,7 @@ object JumpAdHooks {
     }
 
     // ============================================================
-    // 第 4 层：View 层 UI 净化（极简扁平匹配）
+    // 第 4 层：View 层 UI 净化
     // ============================================================
 
     private fun hookViewLayer(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -836,6 +943,7 @@ object JumpAdHooks {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         try {
                             val activity = param.thisObject as Activity
+                            initAppContext(activity)
                             applyAllUIVisibility(activity)
 
                             activity.window?.decorView?.rootView?.viewTreeObserver
@@ -980,6 +1088,7 @@ object JumpAdHooks {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val activity = param.thisObject as? Activity ?: return
+                        initAppContext(activity)
                         applyContentDetailMemberMaskHide(activity)
 
                         activity.window?.decorView?.rootView?.viewTreeObserver
@@ -999,6 +1108,7 @@ object JumpAdHooks {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val activity = param.thisObject as? Activity ?: return
+                        initAppContext(activity)
                         applyContentDetailMemberMaskHide(activity)
                     } catch (e: Exception) {
                         logError("ContentDetailActivity onResume 遮罩隐藏异常", e)
@@ -1188,11 +1298,11 @@ object JumpAdHooks {
             "com.vgjump.jump.bean.my.SettingItem", lpparam.classLoader
         ) ?: return
 
-        // 1. 插入自定义条目：直接通过标准 List.add(0, item) 置顶插入并刷新，规避混淆方法名不存在的风险
         XposedBridge.hookAllMethods(settingActivityClass, "initData", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 try {
                     val activity = param.thisObject as? Activity ?: return
+                    initAppContext(activity)
                     val adapter = XposedHelpers.callMethod(activity, "s") ?: return
 
                     val constructor = settingItemClass.getConstructor(
@@ -1212,7 +1322,6 @@ object JumpAdHooks {
                         null
                     )
 
-                    // 获取 Adapter 内部的数据 List (字段名 f)
                     @Suppress("UNCHECKED_CAST")
                     val dataList = XposedHelpers.getObjectField(adapter, "f") as? MutableList<Any> ?: return
                     val alreadyExists = dataList.any { item ->
@@ -1238,20 +1347,6 @@ object JumpAdHooks {
                 }
             }
         })
-
-        // 2. 点击拦截
-        /*
-        XposedBridge.hookAllMethods(settingActivityClass, "s", object : XC_MethodHook() {
-            override fun afterHookedMethod(param: MethodHookParam) {
-                try {
-                    val adapter = param.result ?: return
-                    hookAdapterBindForSettingsEntry(adapter.javaClass)
-                } catch (e: Exception) {
-                    logError("挂载设置项点击拦截失败", e)
-                }
-            }
-        })
-        */
     }
 
     private val hookedSettingAdapters = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Class<*>, Boolean>())
@@ -1311,6 +1406,7 @@ object JumpAdHooks {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         try {
                             val activity = param.thisObject as Activity
+                            initAppContext(activity)
                             getCachedResId(activity, "myTab").takeIf { it != 0 }?.let { id ->
                                 activity.findViewById<View>(id)?.setOnLongClickListener {
                                     showFullscreenSettings(activity)
@@ -1336,12 +1432,12 @@ object JumpAdHooks {
     @SuppressLint("SetTextI18n")
     private fun showFullscreenSettings(activity: Activity) {
         val prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val blockedPromoCount = prefs.getInt(KEY_BLOCKED_OFFICIAL_PROMO_COUNT, 0)
 
         val items = listOf(
-            SectionHeader("启动与隐私"),
+            SectionHeader("启动与通知"),
             SettingItem(KEY_SKIP_SPLASH, "跳过开屏广告"),
             SettingItem(KEY_HIDE_MSG_PUSH_GUIDE, "屏蔽通知开启引导"),
-            SettingItem(KEY_BLOCK_CLIPBOARD, "禁止后台读取剪贴板"),
 
             SectionHeader("首页"),
             SettingItem(KEY_HIDE_TOPIC_LIST, "隐藏顶部话题"),
@@ -1373,7 +1469,14 @@ object JumpAdHooks {
             SettingItem(KEY_ENABLE_DEBUG_LOG, "开启调试日志"),
             ActionItem("更换 App 图标", desc = "修复官方遗漏图标，含 21 款") {
                 showVisualIconGridPicker(activity)
-            }
+            },
+
+            SectionHeader("实验性功能"),
+            SettingItem(
+                KEY_EXP_BLOCK_OFFICIAL_PROMO_POST,
+                "屏蔽 Jump小酱推广帖子",
+                desc = "累计屏蔽: ${blockedPromoCount} 次"
+            )
         )
 
         val dp = { value: Int -> (value * activity.resources.displayMetrics.density).toInt() }
@@ -1937,7 +2040,6 @@ object JumpAdHooks {
             }
             view.setPadding(0, 0, 0, 0)
         }
-        (view.parent as? View)?.requestLayout()
     }
 
     private fun hidePersistently(view: View) {
@@ -1977,9 +2079,9 @@ object JumpAdHooks {
             KEY_HIDE_WIDGET_VIP_TAG,
             KEY_ENABLE_COPY,
             KEY_HIDE_CONTENT_MEMBER_MASK,
-            KEY_BLOCK_CLIPBOARD,
             KEY_RESTORE_POST_YEAR,
-            KEY_ENABLE_DEBUG_LOG -> false
+            KEY_ENABLE_DEBUG_LOG,
+            KEY_EXP_BLOCK_OFFICIAL_PROMO_POST -> false
 
             else -> false
         }
