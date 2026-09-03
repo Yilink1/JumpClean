@@ -620,20 +620,24 @@ object JumpAdHooks {
                 fieldJumpJson = findFieldRecursively(clazz, "jumpJson")
             }
 
-            val adType = fieldAdType?.get(model)?.toString()?.toIntOrNull() ?: 0
-            val adId = fieldAdId?.get(model)?.toString()?.toLongOrNull() ?: 0L
-            val contentId = fieldContentId?.get(model)?.toString()?.toLongOrNull() ?: 0L
+            val adType = (fieldAdType?.get(model) as? Number)?.toInt()
+                ?: fieldAdType?.get(model)?.toString()?.toIntOrNull() ?: 0
+            val adId = (fieldAdId?.get(model) as? Number)?.toLong()
+                ?: fieldAdId?.get(model)?.toString()?.toLongOrNull() ?: 0L
+            val contentId = (fieldContentId?.get(model) as? Number)?.toLong()
+                ?: fieldContentId?.get(model)?.toString()?.toLongOrNull() ?: 0L
             val jumpJson = fieldJumpJson?.get(model)?.toString() ?: ""
 
             // 强特征：带广告类型 8、负数 adId 或伪造的负数 contentId
             val isPromoFlag = (adType == 8 || adId < 0L || contentId < 0L)
+            if (!isPromoFlag) return false
+
             // 载荷特征：带有游戏商店、周边商城或营销外链导流
-            val hasPromoPayload = jumpJson.contains("gameId") ||
+            contentId < 0L ||
+                    jumpJson.contains("gameId") ||
                     jumpJson.contains("goodsId") ||
                     jumpJson.contains("mall") ||
                     jumpJson.contains("url")
-
-            isPromoFlag && (hasPromoPayload || contentId < 0L)
         } catch (_: Exception) {
             false
         }
@@ -1091,6 +1095,7 @@ object JumpAdHooks {
                         initAppContext(activity)
                         applyContentDetailMemberMaskHide(activity)
 
+                        // 恢复稳定带节流的全局布局监听，确保网络加载后弹出的遮罩无论何时都能被精准消除
                         activity.window?.decorView?.rootView?.viewTreeObserver
                             ?.addOnGlobalLayoutListener {
                                 val now = SystemClock.uptimeMillis()
