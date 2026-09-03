@@ -439,8 +439,52 @@ object JumpAdHooks {
     // ============================================================
 
     private fun hookDataLayer(lpparam: XC_LoadPackage.LoadPackageParam) {
+        hookUserContentItemModel(lpparam)
         hookBrvAdapters(lpparam)
         hookJqAdapter(lpparam)
+    }
+
+    /**
+     * 降维打击：直接挂载未混淆的数据实体类 UserContentItem 构造函数
+     * 当 App 从网络反序列化拆包灌入数据时，在后台线程静默捕获真实完整年份
+     * 彻底摆脱对混淆 Adapter（如 com.drake.brv.b、zn0 等）的依赖，0 主线程开销，0 额外网络请求
+     */
+    private fun hookUserContentItemModel(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            val userContentItemClass = XposedHelpers.findClassIfExists(
+                "com.vgjump.jump.bean.content.UserContentItem", lpparam.classLoader
+            ) ?: return
+
+            val modelHook = object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    if (!isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) return
+                    try {
+                        val obj = param.thisObject ?: return
+                        val contentId = safeCallStringGetter(obj, "getContentId")
+                            ?: XposedHelpers.getObjectField(obj, "contentId")?.toString()
+                        val postTimeStr = safeCallStringGetter(obj, "getPostTimeStr")
+                            ?: XposedHelpers.getObjectField(obj, "postTimeStr")?.toString()
+
+                        if (!contentId.isNullOrBlank() && !postTimeStr.isNullOrBlank() && postTimeStr.contains("-")) {
+                            synchronized(postDateCache) {
+                                if (postDateCache.size >= POST_DATE_CACHE_MAX_SIZE) {
+                                    postDateCache.clear()
+                                }
+                                postDateCache[contentId] = postTimeStr
+                            }
+                            log("✔ [模型源头捕获] 成功缓存社区帖子: contentId=$contentId, postTimeStr=$postTimeStr")
+                        }
+                    } catch (e: Exception) {
+                        logError("UserContentItem 模型捕获异常", e)
+                    }
+                }
+            }
+
+            XposedBridge.hookAllConstructors(userContentItemClass, modelHook)
+            log("✔ UserContentItem 跨版本无混淆数据模型 Hook 已安装")
+        } catch (e: Exception) {
+            logError("✘ UserContentItem 数据模型 Hook 失败", e)
+        }
     }
 
     private fun findBrvAdapterClass(classLoader: ClassLoader): Class<*>? {
@@ -489,7 +533,7 @@ object JumpAdHooks {
                 } catch (_: Throwable) {}
             }
 
-            // 渲染层仅保留原本的静态规则
+            // 渲染层仅保留静态规则（广告/热议折叠），彻底移除对年份缓存的耦合
             val onBindHook = object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
@@ -553,32 +597,6 @@ object JumpAdHooks {
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_POST_AD) && resName in POST_AD_LAYOUT_NAMES) {
                             log("✔ [信息流广告] 成功命中并折叠 Layout: $resName")
                             collapseView(itemView)
-                        }
-
-                        // 4. 帖子年份缓存写入
-                        if (isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) {
-                            try {
-                                val model = try {
-                                    XposedHelpers.callMethod(holder, "e")
-                                } catch (_: Exception) {
-                                    null
-                                }
-                                if (model != null && model.javaClass.name.contains("UserContentItem")) {
-                                    val contentId = safeCallStringGetter(model, "getContentId")
-                                    val postTimeStr = safeCallStringGetter(model, "getPostTimeStr")
-                                    if (!contentId.isNullOrBlank() && !postTimeStr.isNullOrBlank()) {
-                                        synchronized(postDateCache) {
-                                            if (postDateCache.size >= POST_DATE_CACHE_MAX_SIZE) {
-                                                postDateCache.clear()
-                                            }
-                                            postDateCache[contentId] = postTimeStr
-                                        }
-                                        log("✔ [年份缓存] 写入 contentId=$contentId postTimeStr=$postTimeStr")
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                logError("年份缓存写入异常", e)
-                            }
                         }
                     } catch (e: Exception) {
                         logError("BRV onBindViewHolder 过滤异常", e)
@@ -699,6 +717,7 @@ object JumpAdHooks {
         } catch (_: Throwable) {}
     }
 
+    // 保留当前评测列表适配器逻辑不变，优先验证社区帖子模型层捕获
     private fun hookJqAdapter(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             val evaluateAdapterClass = XposedHelpers.findClassIfExists("z52", lpparam.classLoader) ?: return
@@ -996,7 +1015,6 @@ object JumpAdHooks {
             "ivTag" to KEY_HIDE_WIDGET_VIP_TAG
         )
 
-        // 改动 1：使用 HashSet 保存 ID，将递归中的匹配降为 O(1)
         val activeTargetIds = HashSet<Int>()
         targets.forEach { (idName, prefKey) ->
             if (isFeatureEnabled(activity, prefKey)) {
@@ -1023,7 +1041,6 @@ object JumpAdHooks {
         }
     }
 
-    // 改动 1（续）：入参类型改为 Set<Int>
     private fun collapseTargetViews(view: View, targetIds: Set<Int>) {
         if (targetIds.contains(view.id)) {
             collapseView(view)
@@ -1087,7 +1104,6 @@ object JumpAdHooks {
     }
 
     private fun hookContentDetailMemberMask(lpparam: XC_LoadPackage.LoadPackageParam) {
-        // 双重覆盖：既拦截主帖详情页，也拦截带有总结的评论详情页
         val targetActivities = listOf(
             "com.vgjump.jump.ui.content.detail.ContentDetailActivity",
             "com.vgjump.jump.ui.content.detail.CommentDetailActivity"
@@ -1127,13 +1143,9 @@ object JumpAdHooks {
         log("✔ 游戏评价遮罩纯净单点 Hook 已就绪")
     }
 
-    /**
-     * 极速单点消除：纯 ID 直取，0 递归，0 反射，0 掉帧
-     */
     private fun applyContentDetailMemberMaskHide(activity: Activity) {
         if (!isFeatureEnabled(activity, KEY_HIDE_CONTENT_MEMBER_MASK)) return
         try {
-            // clMemberMask 直接涵盖 3008px 挡板及其名下所有渐变/拦截子控件；llMemberTry 涵盖试用引导大卡片
             val targetMaskNames = listOf(
                 "clMemberMask",
                 "llMemberTry",
@@ -1965,7 +1977,6 @@ object JumpAdHooks {
     // 内部工具方法
     // ============================================================
 
-    // 改动 2：只有当实际宽高非 0 时才修改并重设 layoutParams，防止打断渲染管线、杜绝冗余 requestLayout
     private fun collapseView(view: View, safeMode: Boolean = false) {
         if (view.visibility != View.GONE) view.visibility = View.GONE
         view.isEnabled = false
