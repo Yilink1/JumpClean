@@ -40,7 +40,10 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.io.File
 import java.lang.ref.WeakReference
 import java.lang.reflect.Field
+import java.text.SimpleDateFormat
 import java.util.ArrayList
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Function
 
@@ -164,16 +167,23 @@ object JumpAdHooks {
     private var currentActivityName = ""
     private var targetClassLoader: ClassLoader? = null
 
-    // 帖子完整发布日期缓存
+    // 帖子与评测完整发布日期缓存
     private val postDateCache = java.util.Collections.synchronizedMap(LinkedHashMap<String, String>())
     private const val POST_DATE_CACHE_MAX_SIZE = 500
-    private val INTENT_ID_KEYS = listOf("content_id", "evaluate_id", "evaluateId", "postId", "id", "topic_id", "topicId")
+    private val INTENT_ID_KEYS = listOf("content_id", "evaluate_id", "evaluateId", "postId", "id", "topic_id", "topicId", "commentId")
+
+    // 日期格式化工具（完全兼容 API 24 及以上）
+    private val threadLocalDateFormatter = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat {
+            return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        }
+    }
 
     // 内存安全拦截计数器
     private val blockedPromoCounter = AtomicInteger(-1)
     private var appContextRef: WeakReference<Context>? = null
 
-    // 反射 Field 静态缓存（指针复用）
+    // 反射 Field 静态缓存
     @Volatile
     private var fieldAdType: Field? = null
     @Volatile
@@ -440,15 +450,10 @@ object JumpAdHooks {
 
     private fun hookDataLayer(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookUserContentItemModel(lpparam)
+        hookTopicDiscussModel(lpparam)
         hookBrvAdapters(lpparam)
-        hookJqAdapter(lpparam)
     }
 
-    /**
-     * 降维打击：直接挂载未混淆的数据实体类 UserContentItem 构造函数
-     * 当 App 从网络反序列化拆包灌入数据时，在后台线程静默捕获真实完整年份
-     * 彻底摆脱对混淆 Adapter（如 com.drake.brv.b、zn0 等）的依赖，0 主线程开销，0 额外网络请求
-     */
     private fun hookUserContentItemModel(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             val userContentItemClass = XposedHelpers.findClassIfExists(
@@ -472,7 +477,7 @@ object JumpAdHooks {
                                 }
                                 postDateCache[contentId] = postTimeStr
                             }
-                            log("✔ [模型源头捕获] 成功缓存社区帖子: contentId=$contentId, postTimeStr=$postTimeStr")
+                            log("✔ [社区模型源头捕获] 成功缓存: contentId=$contentId, postTimeStr=$postTimeStr")
                         }
                     } catch (e: Exception) {
                         logError("UserContentItem 模型捕获异常", e)
@@ -481,9 +486,50 @@ object JumpAdHooks {
             }
 
             XposedBridge.hookAllConstructors(userContentItemClass, modelHook)
-            log("✔ UserContentItem 跨版本无混淆数据模型 Hook 已安装")
+            log("✔ UserContentItem 社区数据模型 Hook 已安装")
         } catch (e: Exception) {
             logError("✘ UserContentItem 数据模型 Hook 失败", e)
+        }
+    }
+
+    /**
+     * 评测与讨论列表模型拦截（改为 getter 拦截，完美绕过 Unsafe 反序列化盲区）
+     */
+    private fun hookTopicDiscussModel(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            val topicDiscussClass = XposedHelpers.findClassIfExists(
+                "com.vgjump.jump.bean.content.topic.TopicDiscuss", lpparam.classLoader
+            ) ?: return
+
+            XposedBridge.hookAllMethods(topicDiscussClass, "getPostTimeStr", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    if (!isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) return
+                    try {
+                        val obj = param.thisObject ?: return
+                        val postTimeStr = param.result as? String ?: return
+                        if (postTimeStr.isBlank() || !Regex("""^\d{4}-""").containsMatchIn(postTimeStr)) return
+
+                        val postId = safeCallStringGetter(obj, "getPostId")
+                        val topicId = safeCallStringGetter(obj, "getTopicId")
+                        val commentId = safeCallStringGetter(obj, "getCommentId")
+
+                        synchronized(postDateCache) {
+                            if (postDateCache.size >= POST_DATE_CACHE_MAX_SIZE) {
+                                postDateCache.clear()
+                            }
+                            if (!postId.isNullOrBlank()) postDateCache[postId] = postTimeStr
+                            if (!topicId.isNullOrBlank()) postDateCache[topicId] = postTimeStr
+                            if (!commentId.isNullOrBlank()) postDateCache[commentId] = postTimeStr
+                        }
+                        log("✔ [评测 Getter 捕获] 成功缓存: postId=$postId, topicId=$topicId, commentId=$commentId, date=$postTimeStr")
+                    } catch (e: Exception) {
+                        logError("TopicDiscuss getter 捕获异常", e)
+                    }
+                }
+            })
+            log("✔ TopicDiscuss 评测数据 getter 拦截 Hook 已就绪")
+        } catch (e: Exception) {
+            logError("✘ TopicDiscuss 数据模型 Hook 失败", e)
         }
     }
 
@@ -506,7 +552,6 @@ object JumpAdHooks {
                 return
             }
 
-            // 数据源头物理剔除：压根不进列表，从根源杜绝掉帧与占位
             val filterDataHook = object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     if (!isFeatureEnabledSafe(lpparam.classLoader, KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)) return
@@ -533,7 +578,6 @@ object JumpAdHooks {
                 } catch (_: Throwable) {}
             }
 
-            // 渲染层仅保留静态规则（广告/热议折叠），彻底移除对年份缓存的耦合
             val onBindHook = object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
@@ -542,7 +586,6 @@ object JumpAdHooks {
                         val context = itemView.context ?: return
                         initAppContext(context)
 
-                        // 0. Jump+ 会员卡片折叠
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_MEMBER_CARD)) {
                             val buyBtnId = getCachedResId(context, "tvBuy")
                             if (buyBtnId != 0 && itemView.findViewById<View>(buyBtnId) != null) {
@@ -563,7 +606,6 @@ object JumpAdHooks {
                             null
                         } ?: return
 
-                        // 1. 首页顶部 Header：折叠广告 RelativeLayout(R.id.banner)，保留话题栏
                         if (resName.contains("general_interest_home_header")) {
                             if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_BANNER)) {
                                 val bannerId = getCachedResId(context, "banner")
@@ -571,14 +613,12 @@ object JumpAdHooks {
                                     itemView.findViewById<View>(bannerId)?.let { bannerView ->
                                         if (bannerView.visibility != View.GONE) {
                                             collapseView(bannerView)
-                                            log("✔ [首页顶部 Header] 单点折叠广告 banner 完成")
                                         }
                                     }
                                 }
                             }
                         }
 
-                        // 2. Jumper 热议模块
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_HOT_DISCUSS)) {
                             val allTopicId = getCachedResId(context, "flAllTopic")
                             val indicatorId = getCachedResId(context, "clIndicator")
@@ -588,14 +628,11 @@ object JumpAdHooks {
 
                             if (isHotDiscussItem) {
                                 collapseView(itemView)
-                                log("✔ [Jumper 热议] 成功命中并彻底折叠热议卡片: $resName")
                                 return
                             }
                         }
 
-                        // 3. 信息流推荐内嵌广告
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_POST_AD) && resName in POST_AD_LAYOUT_NAMES) {
-                            log("✔ [信息流广告] 成功命中并折叠 Layout: $resName")
                             collapseView(itemView)
                         }
                     } catch (e: Exception) {
@@ -630,7 +667,6 @@ object JumpAdHooks {
         return try {
             val clazz = model.javaClass
 
-            // 首次命中时抓取并缓存 Field 对象，后续直接走指针读取
             if (fieldAdType == null) {
                 fieldAdType = findFieldRecursively(clazz, "adType")
                 fieldAdId = findFieldRecursively(clazz, "adId")
@@ -646,12 +682,11 @@ object JumpAdHooks {
                 ?: fieldContentId?.get(model)?.toString()?.toLongOrNull() ?: 0L
             val jumpJson = fieldJumpJson?.get(model)?.toString() ?: ""
 
-            // 强特征：带广告类型 8、负数 adId 或伪造的负数 contentId
             val isPromoFlag = (adType == 8 || adId < 0L || contentId < 0L)
             if (!isPromoFlag) return false
 
-            // 载荷特征：带有游戏商店、周边商城或营销外链导流
-            contentId < 0L ||
+            adType == 8 ||
+                    contentId < 0L ||
                     jumpJson.contains("gameId") ||
                     jumpJson.contains("goodsId") ||
                     jumpJson.contains("mall") ||
@@ -702,67 +737,16 @@ object JumpAdHooks {
 
             val app = getValidAppContext() ?: return
 
-            // 首次读取初始化
             if (blockedPromoCounter.get() == -1) {
                 val sp = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 blockedPromoCounter.set(sp.getInt(KEY_BLOCKED_OFFICIAL_PROMO_COUNT, 0))
             }
 
-            // 内存纳秒级自增
             blockedPromoCounter.incrementAndGet()
 
-            // 1000ms 防抖异步落盘
             debounceHandler.removeCallbacks(saveCounterRunnable)
             debounceHandler.postDelayed(saveCounterRunnable, 1000L)
         } catch (_: Throwable) {}
-    }
-
-    // 保留当前评测列表适配器逻辑不变，优先验证社区帖子模型层捕获
-    private fun hookJqAdapter(lpparam: XC_LoadPackage.LoadPackageParam) {
-        try {
-            val evaluateAdapterClass = XposedHelpers.findClassIfExists("z52", lpparam.classLoader) ?: return
-
-            XposedBridge.hookAllMethods(evaluateAdapterClass, "D", object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    if (!isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) return
-                    try {
-                        val item = param.args.getOrNull(1) ?: return
-                        if (!item.javaClass.name.contains("TopicDiscuss")) return
-
-                        val postId = safeCallStringGetter(item, "getPostId")
-                        val topicId = safeCallStringGetter(item, "getTopicId")
-                        val postTimeStr = safeCallStringGetter(item, "getPostTimeStr")
-                        if (postTimeStr.isNullOrBlank()) return
-                        if (!Regex("""^\d{4}-""").containsMatchIn(postTimeStr)) return
-
-                        val fullDate = postTimeStr
-
-                        var boundCount = 0
-                        synchronized(postDateCache) {
-                            if (postDateCache.size >= POST_DATE_CACHE_MAX_SIZE) {
-                                postDateCache.clear()
-                            }
-                            if (!postId.isNullOrBlank()) {
-                                postDateCache[postId] = fullDate
-                                boundCount++
-                            }
-                            if (!topicId.isNullOrBlank() && topicId != postId) {
-                                postDateCache[topicId] = fullDate
-                                boundCount++
-                            }
-                        }
-                        if (boundCount > 0) {
-                            log("✔ [评测年份缓存] 写入 postId=$postId topicId=$topicId date=$fullDate")
-                        }
-                    } catch (e: Exception) {
-                        logError("评测年份缓存写入异常", e)
-                    }
-                }
-            })
-            log("✔ 评测列表适配器（z52.D）年份缓存 Hook 已安装")
-        } catch (e: Exception) {
-            logError("✘ 评测列表适配器 Hook 失败", e)
-        }
     }
 
     // ============================================================
@@ -1028,7 +1012,6 @@ object JumpAdHooks {
             }
         }
 
-        // 单独精准折叠 Jump+ 会员卡片
         if (isFeatureEnabled(activity, KEY_HIDE_MEMBER_CARD)) {
             val buyBtnId = getCachedResId(activity, "tvBuy")
             if (buyBtnId != 0) {
