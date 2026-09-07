@@ -83,7 +83,8 @@ object JumpAdHooks {
     private const val KEY_ENABLE_DEBUG_LOG = "enable_debug_log"
     private const val KEY_RESTORE_POST_YEAR = "restore_post_year"
 
-    // 实验性功能 Key
+    // 弹窗与小酱
+    private const val KEY_HIDE_VOUCHER_POPUP = "hide_voucher_popup"
     private const val KEY_EXP_BLOCK_OFFICIAL_PROMO_POST = "exp_block_official_promo_post"
     private const val KEY_BLOCKED_OFFICIAL_PROMO_COUNT = "blocked_official_promo_count"
 
@@ -189,9 +190,9 @@ object JumpAdHooks {
     @Volatile
     private var fieldAdId: Field? = null
     @Volatile
-    private var fieldContentId: Field? = null
+    private var fieldCustomNickname: Field? = null
     @Volatile
-    private var fieldJumpJson: Field? = null
+    private var fieldUserNameStr: Field? = null
 
     // SP 异步防抖 Handler
     private val debounceHandler by lazy { Handler(Looper.getMainLooper()) }
@@ -236,6 +237,34 @@ object JumpAdHooks {
         hookStartupDelayCompress(lpparam)
         hookActivityFlowProbe()
         hookFakeNotificationPermission(lpparam)
+        hookVoucherDialog(lpparam)
+    }
+
+    /**
+     * 专属大额神券霸屏弹窗（含 24 小时倒计时）源头阻断
+     */
+    private fun hookVoucherDialog(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            val mainVmClass = XposedHelpers.findClassIfExists(
+                "com.vgjump.jump.ui.main.MainViewModel", lpparam.classLoader
+            ) ?: return
+
+            mainVmClass.declaredMethods.forEach { method ->
+                if (method.name.contains("VoucherDialog", ignoreCase = true)) {
+                    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                        override fun beforeHookedMethod(param: MethodHookParam) {
+                            if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_VOUCHER_POPUP)) {
+                                param.result = null
+                                log("✔ [源头阻断] 拦截 MainViewModel.${method.name} 优惠券弹窗请求")
+                            }
+                        }
+                    })
+                }
+            }
+            log("✔ 专属大额神券弹窗阻断 Hook 已就绪")
+        } catch (e: Exception) {
+            logError("优惠券弹窗拦截异常", e)
+        }
     }
 
     private fun hookSplashInstantJump(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -466,9 +495,9 @@ object JumpAdHooks {
                     try {
                         val obj = param.thisObject ?: return
                         val contentId = safeCallStringGetter(obj, "getContentId")
-                            ?: XposedHelpers.getObjectField(obj, "contentId")?.toString()
+                            ?: safeGetObjectField(obj, "contentId")?.toString()
                         val postTimeStr = safeCallStringGetter(obj, "getPostTimeStr")
-                            ?: XposedHelpers.getObjectField(obj, "postTimeStr")?.toString()
+                            ?: safeGetObjectField(obj, "postTimeStr")?.toString()
 
                         if (!contentId.isNullOrBlank() && !postTimeStr.isNullOrBlank() && postTimeStr.contains("-")) {
                             synchronized(postDateCache) {
@@ -662,6 +691,11 @@ object JumpAdHooks {
         return modified
     }
 
+    /**
+     * 依据真机反编译证据重构：
+     * 1. 只要带广告标记（adId != null || adType != null）直接视为推广条目
+     * 2. 平铺字段 customNickname / userNameStr 捕获官方小酱账号发出的任何带货帖子
+     */
     private fun isOfficialPromoModel(model: Any): Boolean {
         if (!model.javaClass.name.contains("UserContentItem")) return false
         return try {
@@ -670,27 +704,29 @@ object JumpAdHooks {
             if (fieldAdType == null) {
                 fieldAdType = findFieldRecursively(clazz, "adType")
                 fieldAdId = findFieldRecursively(clazz, "adId")
-                fieldContentId = findFieldRecursively(clazz, "contentId")
-                fieldJumpJson = findFieldRecursively(clazz, "jumpJson")
+                fieldCustomNickname = findFieldRecursively(clazz, "customNickname")
+                fieldUserNameStr = findFieldRecursively(clazz, "userNameStr")
             }
 
-            val adType = (fieldAdType?.get(model) as? Number)?.toInt()
-                ?: fieldAdType?.get(model)?.toString()?.toIntOrNull() ?: 0
-            val adId = (fieldAdId?.get(model) as? Number)?.toLong()
-                ?: fieldAdId?.get(model)?.toString()?.toLongOrNull() ?: 0L
-            val contentId = (fieldContentId?.get(model) as? Number)?.toLong()
-                ?: fieldContentId?.get(model)?.toString()?.toLongOrNull() ?: 0L
-            val jumpJson = fieldJumpJson?.get(model)?.toString() ?: ""
+            // 铁证 1：服务端广告标记判定（充分条件）
+            val adType = fieldAdType?.get(model)
+            val adId = fieldAdId?.get(model)
+            if (adType != null || adId != null) {
+                return true
+            }
 
-            val isPromoFlag = (adType == 8 || adId < 0L || contentId < 0L)
-            if (!isPromoFlag) return false
+            // 铁证 2：作者平铺字段精准识别小酱发帖
+            val nickname = safeCallStringGetter(model, "getCustomNickname")
+                ?: safeCallStringGetter(model, "getUserNameStr")
+                ?: fieldCustomNickname?.get(model)?.toString()
+                ?: fieldUserNameStr?.get(model)?.toString()
+                ?: ""
 
-            adType == 8 ||
-                    contentId < 0L ||
-                    jumpJson.contains("gameId") ||
-                    jumpJson.contains("goodsId") ||
-                    jumpJson.contains("mall") ||
-                    jumpJson.contains("url")
+            if (nickname.contains("小酱") || nickname.contains("Jump官方")) {
+                return true
+            }
+
+            false
         } catch (_: Exception) {
             false
         }
@@ -708,6 +744,14 @@ object JumpAdHooks {
             }
         }
         return null
+    }
+
+    private fun safeGetObjectField(obj: Any, fieldName: String): Any? {
+        return try {
+            XposedHelpers.getObjectField(obj, fieldName)
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun initAppContext(context: Context) {
@@ -731,8 +775,8 @@ object JumpAdHooks {
     private fun recordOfficialPromoBlockedDirect(model: Any) {
         try {
             val content = safeCallStringGetter(model, "getContent")
-                ?: XposedHelpers.getObjectField(model, "content")?.toString() ?: ""
-            val adId = XposedHelpers.getObjectField(model, "adId")?.toString() ?: ""
+                ?: safeGetObjectField(model, "content")?.toString() ?: ""
+            val adId = safeGetObjectField(model, "adId")?.toString() ?: ""
             log("✔ [数据层剔除] 物理移除 Jump小酱推广帖子: adId=$adId, content=$content")
 
             val app = getValidAppContext() ?: return
@@ -1377,8 +1421,9 @@ object JumpAdHooks {
         val blockedPromoCount = prefs.getInt(KEY_BLOCKED_OFFICIAL_PROMO_COUNT, 0)
 
         val items = listOf(
-            SectionHeader("启动与通知"),
+            SectionHeader("启动与弹窗"),
             SettingItem(KEY_SKIP_SPLASH, "跳过开屏广告"),
+            SettingItem(KEY_HIDE_VOUCHER_POPUP, "屏蔽专属大额神券霸屏弹窗"),
             SettingItem(KEY_HIDE_MSG_PUSH_GUIDE, "屏蔽通知开启引导"),
 
             SectionHeader("首页"),
@@ -2004,6 +2049,7 @@ object JumpAdHooks {
     private fun getDefaultFeatureValue(key: String): Boolean {
         return when (key) {
             KEY_SKIP_SPLASH,
+            KEY_HIDE_VOUCHER_POPUP,
             KEY_HIDE_BANNER,
             KEY_HIDE_TOPIC_LIST,
             KEY_HIDE_HOT_DISCUSS,
