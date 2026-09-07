@@ -588,9 +588,14 @@ object JumpAdHooks {
 
             val filterDataHook = object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    if (!isFeatureEnabledSafe(lpparam.classLoader, KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)) return
+                    val rawList = param.args.getOrNull(0) ?: return
+                    val isExpEnabled = isFeatureEnabledSafe(lpparam.classLoader, KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
+
+                    log("[BRV数据流入] 真实触发方法=${param.method.name}, 开关开启=$isExpEnabled, 列表类型=${rawList.javaClass.name}, 数量=${(rawList as? List<*>)?.size ?: 0}")
+
+                    if (!isExpEnabled) return
+
                     try {
-                        val rawList = param.args.getOrNull(0) ?: return
                         if (rawList is MutableList<*>) {
                             filterPromoList(rawList)
                         } else if (rawList is List<*>) {
@@ -605,11 +610,17 @@ object JumpAdHooks {
                 }
             }
 
-            val dataMethods = listOf("setModels", "addModels", "setMModels", "setList")
-            dataMethods.forEach { methodName ->
-                try {
-                    XposedBridge.hookAllMethods(adapterClass, methodName, filterDataHook)
-                } catch (_: Throwable) {}
+            // 核心修改：动态扫描该类所有入参包含 List 的方法，兼容混淆
+            var hookCount = 0
+            adapterClass.declaredMethods.forEach { method ->
+                val paramTypes = method.parameterTypes
+                if (paramTypes.isNotEmpty() && List::class.java.isAssignableFrom(paramTypes[0])) {
+                    try {
+                        XposedBridge.hookMethod(method, filterDataHook)
+                        hookCount++
+                        log("[Adapter方法挂载成功] 拦截候选方法: ${method.name}(${paramTypes.joinToString { it.simpleName }})")
+                    } catch (_: Throwable) {}
+                }
             }
 
             val onBindHook = object : XC_MethodHook() {
@@ -676,7 +687,7 @@ object JumpAdHooks {
             }
 
             XposedBridge.hookAllMethods(adapterClass, "onBindViewHolder", onBindHook)
-            log("✔ BRV 极速数据源物理剔除与过滤 Hook 已就绪")
+            log("✔ BRV 极速数据源物理剔除与过滤 Hook 已就绪 (共挂载 $hookCount 个数据方法)")
         } catch (e: Exception) {
             logError("✘ BRV Adapter Hook 失败", e)
         }
@@ -687,6 +698,18 @@ object JumpAdHooks {
         val iterator = list.iterator()
         while (iterator.hasNext()) {
             val item = iterator.next() ?: continue
+
+            if (item.javaClass.name.contains("UserContentItem")) {
+                val nick = safeCallStringGetter(item, "getCustomNickname")
+                    ?: safeCallStringGetter(item, "getUserNameStr")
+                    ?: safeGetObjectField(item, "customNickname")?.toString()
+                    ?: safeGetObjectField(item, "userNameStr")?.toString()
+                    ?: ""
+                val adType = safeGetObjectField(item, "adType")
+                val adId = safeGetObjectField(item, "adId")
+                log("[列表条目探测] 昵称='$nick', adType=$adType, adId=$adId")
+            }
+
             if (isOfficialPromoModel(item)) {
                 iterator.remove()
                 modified = true
@@ -784,18 +807,27 @@ object JumpAdHooks {
             val adId = safeGetObjectField(model, "adId")?.toString() ?: ""
             log("✔ [数据层剔除] 物理移除 Jump小酱推广帖子: adId=$adId, content=$content")
 
-            val app = getValidAppContext() ?: return
-
-            if (blockedPromoCounter.get() == -1) {
-                val sp = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                blockedPromoCounter.set(sp.getInt(KEY_BLOCKED_OFFICIAL_PROMO_COUNT, 0))
+            val app = getValidAppContext()
+            if (app == null) {
+                logError("✘ 计数失败：AppContext 为空，无法写入 SharedPreferences")
+                return
             }
 
-            blockedPromoCounter.incrementAndGet()
+            val sp = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            if (blockedPromoCounter.get() == -1) {
+                val currentSaved = sp.getInt(KEY_BLOCKED_OFFICIAL_PROMO_COUNT, 0)
+                blockedPromoCounter.set(currentSaved)
+                log("[计数器初始化] 从 SP 读取到初始值: $currentSaved")
+            }
+
+            val newCount = blockedPromoCounter.incrementAndGet()
+            log("[计数器递增] 内存当前计数值: $newCount")
 
             debounceHandler.removeCallbacks(saveCounterRunnable)
             debounceHandler.postDelayed(saveCounterRunnable, 1000L)
-        } catch (_: Throwable) {}
+        } catch (e: Throwable) {
+            logError("记录拦截计数异常", e as? Exception)
+        }
     }
 
     // ============================================================
