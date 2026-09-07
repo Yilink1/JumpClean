@@ -40,10 +40,10 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.io.File
 import java.lang.ref.WeakReference
 import java.lang.reflect.Field
-import java.text.SimpleDateFormat
 import java.util.ArrayList
-import java.util.Date
-import java.util.Locale
+import java.util.Collections
+import java.util.LinkedHashMap
+import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Function
 
@@ -169,16 +169,9 @@ object JumpAdHooks {
     private var targetClassLoader: ClassLoader? = null
 
     // 帖子与评测完整发布日期缓存
-    private val postDateCache = java.util.Collections.synchronizedMap(LinkedHashMap<String, String>())
+    private val postDateCache = Collections.synchronizedMap(LinkedHashMap<String, String>())
     private const val POST_DATE_CACHE_MAX_SIZE = 500
     private val INTENT_ID_KEYS = listOf("content_id", "evaluate_id", "evaluateId", "postId", "id", "topic_id", "topicId", "commentId")
-
-    // 日期格式化工具（完全兼容 API 24 及以上）
-    private val threadLocalDateFormatter = object : ThreadLocal<SimpleDateFormat>() {
-        override fun initialValue(): SimpleDateFormat {
-            return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        }
-    }
 
     // 内存安全拦截计数器
     private val blockedPromoCounter = AtomicInteger(-1)
@@ -240,9 +233,6 @@ object JumpAdHooks {
         hookVoucherDialog(lpparam)
     }
 
-    /**
-     * 神券霸屏弹窗源头阻断（兼容混淆类 ui.main.g 与明文类 MainViewModel）
-     */
     private fun hookVoucherDialog(lpparam: XC_LoadPackage.LoadPackageParam) {
         val targetClassNames = listOf(
             "com.vgjump.jump.ui.main.MainViewModel",
@@ -494,41 +484,34 @@ object JumpAdHooks {
                 "com.vgjump.jump.bean.content.UserContentItem", lpparam.classLoader
             ) ?: return
 
-            val modelHook = object : XC_MethodHook() {
+            XposedBridge.hookAllMethods(userContentItemClass, "getPostTimeStr", object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     if (!isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) return
                     try {
                         val obj = param.thisObject ?: return
+                        val postTimeStr = param.result as? String ?: return
+                        if (postTimeStr.isBlank() || !Regex("""^\d{4}-""").containsMatchIn(postTimeStr)) return
+
                         val contentId = safeCallStringGetter(obj, "getContentId")
                             ?: safeGetObjectField(obj, "contentId")?.toString()
-                        val postTimeStr = safeCallStringGetter(obj, "getPostTimeStr")
-                            ?: safeGetObjectField(obj, "postTimeStr")?.toString()
 
-                        if (!contentId.isNullOrBlank() && !postTimeStr.isNullOrBlank() && postTimeStr.contains("-")) {
+                        if (!contentId.isNullOrBlank()) {
                             synchronized(postDateCache) {
                                 if (postDateCache.size >= POST_DATE_CACHE_MAX_SIZE) {
                                     postDateCache.clear()
                                 }
                                 postDateCache[contentId] = postTimeStr
                             }
-                            log("✔ [社区模型源头捕获] 成功缓存: contentId=$contentId, postTimeStr=$postTimeStr")
                         }
-                    } catch (e: Exception) {
-                        logError("UserContentItem 模型捕获异常", e)
-                    }
+                    } catch (_: Exception) {}
                 }
-            }
-
-            XposedBridge.hookAllConstructors(userContentItemClass, modelHook)
+            })
             log("✔ UserContentItem 社区数据模型 Hook 已安装")
         } catch (e: Exception) {
             logError("✘ UserContentItem 数据模型 Hook 失败", e)
         }
     }
 
-    /**
-     * 评测与讨论列表模型拦截（改为 getter 拦截，完美绕过 Unsafe 反序列化盲区）
-     */
     private fun hookTopicDiscussModel(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             val topicDiscussClass = XposedHelpers.findClassIfExists(
@@ -555,10 +538,7 @@ object JumpAdHooks {
                             if (!topicId.isNullOrBlank()) postDateCache[topicId] = postTimeStr
                             if (!commentId.isNullOrBlank()) postDateCache[commentId] = postTimeStr
                         }
-                        log("✔ [评测 Getter 捕获] 成功缓存: postId=$postId, topicId=$topicId, commentId=$commentId, date=$postTimeStr")
-                    } catch (e: Exception) {
-                        logError("TopicDiscuss getter 捕获异常", e)
-                    }
+                    } catch (_: Exception) {}
                 }
             })
             log("✔ TopicDiscuss 评测数据 getter 拦截 Hook 已就绪")
@@ -588,37 +568,48 @@ object JumpAdHooks {
 
             val filterDataHook = object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    val rawList = param.args.getOrNull(0) ?: return
+                    val args = param.args
                     val isExpEnabled = isFeatureEnabledSafe(lpparam.classLoader, KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
+                    val isRestoreEnabled = isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)
 
-                    log("[BRV数据流入] 真实触发方法=${param.method.name}, 开关开启=$isExpEnabled, 列表类型=${rawList.javaClass.name}, 数量=${(rawList as? List<*>)?.size ?: 0}")
+                    // 扫描所有入参，只要是集合类型（List 或 Collection）一律捕获并过滤
+                    for (i in args.indices) {
+                        val arg = args[i] ?: continue
+                        if (arg is Collection<*>) {
+                            log("[BRV数据流入] 方法=${param.method.name}, 参数位置=$i, 类型=${arg.javaClass.name}, 数量=${arg.size}")
 
-                    if (!isExpEnabled) return
+                            if (isRestoreEnabled) {
+                                cacheDatesFromRawCollection(arg)
+                            }
 
-                    try {
-                        if (rawList is MutableList<*>) {
-                            filterPromoList(rawList)
-                        } else if (rawList is List<*>) {
-                            val mutableCopy = ArrayList(rawList)
-                            if (filterPromoList(mutableCopy)) {
-                                param.args[0] = mutableCopy
+                            if (isExpEnabled) {
+                                try {
+                                    if (arg is MutableList<*>) {
+                                        filterPromoList(arg)
+                                    } else if (arg is List<*>) {
+                                        val mutableCopy = ArrayList(arg)
+                                        if (filterPromoList(mutableCopy)) {
+                                            param.args[i] = mutableCopy
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    logError("BRV 数据源拦截过滤异常", e)
+                                }
                             }
                         }
-                    } catch (e: Exception) {
-                        logError("BRV 数据源拦截过滤异常", e)
                     }
                 }
             }
 
-            // 核心修改：动态扫描该类所有入参包含 List 的方法，兼容混淆
+            // 动态扫描：凡是参数包含 Collection 或 List 的方法（包括加载更多 addModels / 各种带索引的重载方法），全线拦截
             var hookCount = 0
             adapterClass.declaredMethods.forEach { method ->
-                val paramTypes = method.parameterTypes
-                if (paramTypes.isNotEmpty() && List::class.java.isAssignableFrom(paramTypes[0])) {
+                val hasCollectionParam = method.parameterTypes.any { Collection::class.java.isAssignableFrom(it) }
+                if (hasCollectionParam) {
                     try {
                         XposedBridge.hookMethod(method, filterDataHook)
                         hookCount++
-                        log("[Adapter方法挂载成功] 拦截候选方法: ${method.name}(${paramTypes.joinToString { it.simpleName }})")
+                        log("[Adapter方法挂载成功] 拦截数据方法: ${method.name}(${method.parameterTypes.joinToString { it.simpleName }})")
                     } catch (_: Throwable) {}
                 }
             }
@@ -630,6 +621,11 @@ object JumpAdHooks {
                         val itemView = XposedHelpers.getObjectField(holder, "itemView") as? View ?: return
                         val context = itemView.context ?: return
                         initAppContext(context)
+
+                        // 首页推荐流列表条目年份还原（带诊断探针版本）
+                        if (isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) {
+                            restoreHomeItemYearWithProbe(holder, itemView, context)
+                        }
 
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_MEMBER_CARD)) {
                             val buyBtnId = getCachedResId(context, "tvBuy")
@@ -693,6 +689,109 @@ object JumpAdHooks {
         }
     }
 
+    /**
+     * 数据流入时，全量解析并缓存年份
+     */
+    private fun cacheDatesFromRawCollection(collection: Collection<*>) {
+        try {
+            for (item in collection) {
+                if (item == null) continue
+                val className = item.javaClass.name
+                if (className.contains("UserContentItem") || className.contains("TopicDiscuss")) {
+                    val postTimeStr = safeCallStringGetter(item, "getPostTimeStr")
+                        ?: safeGetObjectField(item, "postTimeStr")?.toString() ?: continue
+
+                    if (postTimeStr.isNotBlank() && Regex("""^\d{4}-""").containsMatchIn(postTimeStr)) {
+                        val contentId = safeCallStringGetter(item, "getContentId")
+                            ?: safeCallStringGetter(item, "getPostId")
+                            ?: safeGetObjectField(item, "contentId")?.toString()
+                            ?: safeGetObjectField(item, "postId")?.toString()
+
+                        if (!contentId.isNullOrBlank()) {
+                            synchronized(postDateCache) {
+                                if (postDateCache.size >= POST_DATE_CACHE_MAX_SIZE) {
+                                    postDateCache.clear()
+                                }
+                                postDateCache[contentId] = postTimeStr
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * 首页列表条目还原年份（带清晰诊断探针，彻底告别盲猜）
+     */
+    private fun restoreHomeItemYearWithProbe(holder: Any, itemView: View, context: Context) {
+        try {
+            val tvDateId = getCachedResId(context, "tvDate").takeIf { it != 0 }
+                ?: getCachedResId(context, "tvTime")
+
+            if (tvDateId == 0) return
+            val tvDate = itemView.findViewById<TextView>(tvDateId) ?: return
+
+            val currentText = tvDate.text?.toString() ?: return
+            if (currentText.isBlank() || currentText.contains(Regex("""\b\d{4}\b"""))) return
+
+            val datePattern = Regex("""\d{2}-\d{2}""")
+            if (!datePattern.containsMatchIn(currentText)) return
+
+            // 1. 穿透读取：直接从 holder 的成员字段中寻找真实的业务模型
+            var targetModel: Any? = null
+            var curClass: Class<*>? = holder.javaClass
+            while (curClass != null && curClass != Any::class.java) {
+                for (f in curClass.declaredFields) {
+                    f.isAccessible = true
+                    val value = f.get(holder) ?: continue
+                    val valName = value.javaClass.name
+                    if (valName.contains("UserContentItem") || valName.contains("TopicDiscuss")) {
+                        targetModel = value
+                        break
+                    }
+                }
+                if (targetModel != null) break
+                curClass = curClass.superclass
+            }
+
+            // 2. 如果 holder 肚子里没有，尝试通过 Adapter 的数据容器兜底
+            if (targetModel == null) {
+                try {
+                    val adapter = XposedHelpers.callMethod(holder, "getBindingAdapter")
+                    val pos = XposedHelpers.callMethod(holder, "getLayoutPosition") as? Int ?: -1
+                    val models = (XposedHelpers.getObjectField(adapter, "models") as? List<*>)
+                        ?: (XposedHelpers.getObjectField(adapter, "f") as? List<*>)
+
+                    if (models != null && pos in models.indices) {
+                        targetModel = models[pos]
+                    }
+                } catch (_: Throwable) {}
+            }
+
+            // 3. 诊断探针：观察 Model 捕获情况
+            if (targetModel == null) {
+                log("[年份还原断点] 未找到Model: holder=${holder.javaClass.name}, 当前文本='$currentText'")
+                return
+            }
+
+            val fullDate = safeCallStringGetter(targetModel, "getPostTimeStr")
+                ?: safeGetObjectField(targetModel, "postTimeStr")?.toString()
+
+            if (fullDate.isNullOrBlank() || !Regex("""^\d{4}-""").containsMatchIn(fullDate)) {
+                log("[年份还原断点] Model无有效日期: 类名=${targetModel.javaClass.name}, 读取值='$fullDate'")
+                return
+            }
+
+            val newText = currentText.replaceFirst(datePattern, Regex.escapeReplacement(fullDate))
+            tvDate.text = newText
+            log("✔ [首页年份还原成功] $currentText -> $newText")
+
+        } catch (t: Throwable) {
+            logError("✘ [首页年份异常]: ${t.javaClass.simpleName} - ${t.message}")
+        }
+    }
+
     private fun filterPromoList(list: MutableList<*>): Boolean {
         var modified = false
         val iterator = list.iterator()
@@ -719,11 +818,6 @@ object JumpAdHooks {
         return modified
     }
 
-    /**
-     * 依据真机反编译证据重构：
-     * 1. 广告标记判定：adId != null || adType != null 直接判定为推广条目
-     * 2. 平铺字段匹配：customNickname / userNameStr 捕获官方小酱带货帖
-     */
     private fun isOfficialPromoModel(model: Any): Boolean {
         if (!model.javaClass.name.contains("UserContentItem")) return false
         return try {
@@ -736,14 +830,14 @@ object JumpAdHooks {
                 fieldUserNameStr = findFieldRecursively(clazz, "userNameStr")
             }
 
-            // 铁证 1：服务端广告标记判定
+            // 广告标记判定
             val adType = fieldAdType?.get(model)
             val adId = fieldAdId?.get(model)
             if (adType != null || adId != null) {
                 return true
             }
 
-            // 铁证 2：作者平铺字段精准识别小酱发帖
+            // 小酱马甲识别
             val nickname = safeCallStringGetter(model, "getCustomNickname")
                 ?: safeCallStringGetter(model, "getUserNameStr")
                 ?: fieldCustomNickname?.get(model)?.toString()
@@ -1230,6 +1324,9 @@ object JumpAdHooks {
         }
     }
 
+    /**
+     * 详情页（帖子、评价、游戏详情）完整年份还原读取
+     */
     private fun hookPostDateCacheRead(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             XposedHelpers.findAndHookMethod(
@@ -1286,7 +1383,7 @@ object JumpAdHooks {
 
                             if (newText != incomingText) {
                                 param.args[0] = newText
-                                log("✔ [年份缓存] 拦截渲染: $incomingText -> $newText")
+                                log("✔ [详情页年份还原] 拦截渲染: $incomingText -> $newText")
                             }
                         } catch (e: Exception) {
                             logError("年份缓存读取异常", e)
@@ -1372,7 +1469,7 @@ object JumpAdHooks {
         })
     }
 
-    private val hookedSettingAdapters = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Class<*>, Boolean>())
+    private val hookedSettingAdapters = Collections.newSetFromMap(WeakHashMap<Class<*>, Boolean>())
 
     private fun hookAdapterBindForSettingsEntry(adapterClass: Class<*>) {
         synchronized(hookedSettingAdapters) {
