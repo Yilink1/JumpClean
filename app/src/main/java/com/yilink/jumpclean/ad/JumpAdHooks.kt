@@ -241,29 +241,34 @@ object JumpAdHooks {
     }
 
     /**
-     * 专属大额神券霸屏弹窗（含 24 小时倒计时）源头阻断
+     * 神券霸屏弹窗源头阻断（兼容混淆类 ui.main.g 与明文类 MainViewModel）
      */
     private fun hookVoucherDialog(lpparam: XC_LoadPackage.LoadPackageParam) {
-        try {
-            val mainVmClass = XposedHelpers.findClassIfExists(
-                "com.vgjump.jump.ui.main.MainViewModel", lpparam.classLoader
-            ) ?: return
+        val targetClassNames = listOf(
+            "com.vgjump.jump.ui.main.MainViewModel",
+            "com.vgjump.jump.ui.main.g"
+        )
 
-            mainVmClass.declaredMethods.forEach { method ->
+        for (className in targetClassNames) {
+            val vmClass = XposedHelpers.findClassIfExists(className, lpparam.classLoader) ?: continue
+            var hooked = false
+            vmClass.declaredMethods.forEach { method ->
                 if (method.name.contains("VoucherDialog", ignoreCase = true)) {
                     XposedBridge.hookMethod(method, object : XC_MethodHook() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
                             if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_VOUCHER_POPUP)) {
                                 param.result = null
-                                log("✔ [源头阻断] 拦截 MainViewModel.${method.name} 优惠券弹窗请求")
+                                log("✔ [源头阻断] 拦截优惠券弹窗请求: ${vmClass.simpleName}.${method.name}")
                             }
                         }
                     })
+                    hooked = true
                 }
             }
-            log("✔ 专属大额神券弹窗阻断 Hook 已就绪")
-        } catch (e: Exception) {
-            logError("优惠券弹窗拦截异常", e)
+            if (hooked) {
+                log("✔ 屏蔽神券弹窗 Hook 已就绪 ($className)")
+                return
+            }
         }
     }
 
@@ -693,8 +698,8 @@ object JumpAdHooks {
 
     /**
      * 依据真机反编译证据重构：
-     * 1. 只要带广告标记（adId != null || adType != null）直接视为推广条目
-     * 2. 平铺字段 customNickname / userNameStr 捕获官方小酱账号发出的任何带货帖子
+     * 1. 广告标记判定：adId != null || adType != null 直接判定为推广条目
+     * 2. 平铺字段匹配：customNickname / userNameStr 捕获官方小酱带货帖
      */
     private fun isOfficialPromoModel(model: Any): Boolean {
         if (!model.javaClass.name.contains("UserContentItem")) return false
@@ -708,7 +713,7 @@ object JumpAdHooks {
                 fieldUserNameStr = findFieldRecursively(clazz, "userNameStr")
             }
 
-            // 铁证 1：服务端广告标记判定（充分条件）
+            // 铁证 1：服务端广告标记判定
             val adType = fieldAdType?.get(model)
             val adId = fieldAdId?.get(model)
             if (adType != null || adId != null) {
@@ -1423,7 +1428,7 @@ object JumpAdHooks {
         val items = listOf(
             SectionHeader("启动与弹窗"),
             SettingItem(KEY_SKIP_SPLASH, "跳过开屏广告"),
-            SettingItem(KEY_HIDE_VOUCHER_POPUP, "屏蔽专属大额神券霸屏弹窗"),
+            SettingItem(KEY_HIDE_VOUCHER_POPUP, "屏蔽神券弹窗"),
             SettingItem(KEY_HIDE_MSG_PUSH_GUIDE, "屏蔽通知开启引导"),
 
             SectionHeader("首页"),
