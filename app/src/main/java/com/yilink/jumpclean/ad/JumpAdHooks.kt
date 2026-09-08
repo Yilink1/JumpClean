@@ -104,6 +104,14 @@ object JumpAdHooks {
     private val RETRY_DELAYS_MS = longArrayOf(500L, 1500L, 3000L)
     private const val THROTTLE_INTERVAL_MS = 50L
 
+    // ==================== 静态预编译正则（0 运行时重复分配） ====================
+
+    private val REGEX_YEAR_PREFIX = Regex("""^\d{4}-""")
+    private val REGEX_HAS_YEAR = Regex("""\b\d{4}\b""")
+    private val REGEX_MM_DD = Regex("""\b(\d{2}-\d{2})\b""")
+    private val REGEX_FULL_DATE = Regex("""^(\d{4})-(\d{2}-\d{2})""")
+    private val REGEX_IMAGE_CLEAN = Regex("""(?i)\s*image""")
+
     // ==================== 广告 Layout 资源黑名单 ====================
 
     private val POST_AD_LAYOUT_NAMES = setOf(
@@ -490,7 +498,7 @@ object JumpAdHooks {
                     try {
                         val obj = param.thisObject ?: return
                         val postTimeStr = param.result as? String ?: return
-                        if (postTimeStr.isBlank() || !Regex("""^\d{4}-""").containsMatchIn(postTimeStr)) return
+                        if (postTimeStr.isBlank() || !REGEX_YEAR_PREFIX.containsMatchIn(postTimeStr)) return
 
                         val contentId = safeCallStringGetter(obj, "getContentId")
                             ?: safeGetObjectField(obj, "contentId")?.toString()
@@ -524,7 +532,7 @@ object JumpAdHooks {
                     try {
                         val obj = param.thisObject ?: return
                         val postTimeStr = param.result as? String ?: return
-                        if (postTimeStr.isBlank() || !Regex("""^\d{4}-""").containsMatchIn(postTimeStr)) return
+                        if (postTimeStr.isBlank() || !REGEX_YEAR_PREFIX.containsMatchIn(postTimeStr)) return
 
                         val postId = safeCallStringGetter(obj, "getPostId")
                         val topicId = safeCallStringGetter(obj, "getTopicId")
@@ -600,7 +608,7 @@ object JumpAdHooks {
                 }
             }
 
-            // 正确保留的优化：明确排除 onBindViewHolder，杜绝 payloads 误拦截引起的无谓开销与刷屏
+            // 明确排除 onBindViewHolder，杜绝三参 payloads 误拦截引起的无谓开销与刷屏
             var hookCount = 0
             adapterClass.declaredMethods.forEach { method ->
                 if (method.name != "onBindViewHolder") {
@@ -623,8 +631,9 @@ object JumpAdHooks {
                         val context = itemView.context ?: return
                         initAppContext(context)
 
+                        // 列表条目统一执行安全无崩溃的年份一致性校验还原
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) {
-                            restoreHomeItemYearWithProbe(holder, itemView, context)
+                            restoreItemYearWithValidation(holder, itemView, context)
                         }
 
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_MEMBER_CARD)) {
@@ -698,9 +707,11 @@ object JumpAdHooks {
                     val postTimeStr = safeCallStringGetter(item, "getPostTimeStr")
                         ?: safeGetObjectField(item, "postTimeStr")?.toString() ?: continue
 
-                    if (postTimeStr.isNotBlank() && Regex("""^\d{4}-""").containsMatchIn(postTimeStr)) {
+                    if (postTimeStr.isNotBlank() && REGEX_YEAR_PREFIX.containsMatchIn(postTimeStr)) {
                         val contentId = safeCallStringGetter(item, "getContentId")
                             ?: safeCallStringGetter(item, "getPostId")
+                            ?: safeCallStringGetter(item, "getTopicId")
+                            ?: safeCallStringGetter(item, "getCommentId")
                             ?: safeGetObjectField(item, "contentId")?.toString()
                             ?: safeGetObjectField(item, "postId")?.toString()
 
@@ -719,9 +730,26 @@ object JumpAdHooks {
     }
 
     /**
-     * 还原年份：彻底移除跨类的全局静态 Field 缓存，每个条目独立安全遍历，兼顾兼容性与准确性
+     * 核心规则：利用静态单例正则比对月-日；相同则拼真实年份，不相同则标未知年份（防止把更新时间误覆盖为发布时间）
      */
-    private fun restoreHomeItemYearWithProbe(holder: Any, itemView: View, context: Context) {
+    private fun applyValidatedYear(currentText: String, fullDate: String): String? {
+        val uiDateMatch = REGEX_MM_DD.find(currentText) ?: return null
+        val uiMonthDay = uiDateMatch.value
+
+        val modelDateMatch = REGEX_FULL_DATE.find(fullDate) ?: return null
+        val (modelYear, modelMonthDay) = modelDateMatch.destructured
+
+        return if (uiMonthDay == modelMonthDay) {
+            currentText.replaceFirst(uiMonthDay, "$modelYear-$uiMonthDay")
+        } else {
+            currentText.replaceFirst(uiMonthDay, "未知年份-$uiMonthDay")
+        }
+    }
+
+    /**
+     * 列表条目（首页、评测、社区列表）通用年份还原
+     */
+    private fun restoreItemYearWithValidation(holder: Any, itemView: View, context: Context) {
         try {
             val tvDateId = getCachedResId(context, "tvDate").takeIf { it != 0 }
                 ?: getCachedResId(context, "tvTime")
@@ -730,14 +758,12 @@ object JumpAdHooks {
             val tvDate = itemView.findViewById<TextView>(tvDateId) ?: return
 
             val currentText = tvDate.text?.toString() ?: return
-            if (currentText.isBlank() || currentText.contains(Regex("""\b\d{4}\b"""))) return
+            // 快速断言：已有年份、包含未知年份或不是 MM-dd 格式，直接返回，绝不执行后续反射
+            if (currentText.isBlank() || REGEX_HAS_YEAR.containsMatchIn(currentText) || currentText.contains("未知年份")) return
+            if (!REGEX_MM_DD.containsMatchIn(currentText)) return
 
-            val datePattern = Regex("""\d{2}-\d{2}""")
-            if (!datePattern.containsMatchIn(currentText)) return
-
+            // 1. 穿透读取：按当前 holder 实例安全遍历
             var targetModel: Any? = null
-
-            // 1. 穿透读取：遍历当前 holder 的所有成员字段寻找模型
             var curClass: Class<*>? = holder.javaClass
             while (curClass != null && curClass != Any::class.java) {
                 for (f in curClass.declaredFields) {
@@ -753,7 +779,7 @@ object JumpAdHooks {
                 curClass = curClass.superclass
             }
 
-            // 2. 如果 holder 里没有，从 Adapter 数据容器兜底
+            // 2. 如果 holder 内部未装载，从 Adapter 数据容器兜底
             if (targetModel == null) {
                 try {
                     val adapter = XposedHelpers.callMethod(holder, "getBindingAdapter")
@@ -775,17 +801,17 @@ object JumpAdHooks {
             val fullDate = safeCallStringGetter(targetModel, "getPostTimeStr")
                 ?: safeGetObjectField(targetModel, "postTimeStr")?.toString()
 
-            if (fullDate.isNullOrBlank() || !Regex("""^\d{4}-""").containsMatchIn(fullDate)) {
+            if (fullDate.isNullOrBlank() || !REGEX_YEAR_PREFIX.containsMatchIn(fullDate)) {
                 log("[年份还原断点] Model无有效日期: 类名=${targetModel.javaClass.name}, 读取值='$fullDate'")
                 return
             }
 
-            val newText = currentText.replaceFirst(datePattern, Regex.escapeReplacement(fullDate))
+            val newText = applyValidatedYear(currentText, fullDate) ?: return
             tvDate.text = newText
-            log("✔ [首页年份还原成功] $currentText -> $newText")
+            log("✔ [列表条目年份还原] $currentText -> $newText")
 
         } catch (t: Throwable) {
-            logError("✘ [首页年份异常]: ${t.javaClass.simpleName} - ${t.message}")
+            logError("✘ [列表条目年份异常]: ${t.javaClass.simpleName} - ${t.message}")
         }
     }
 
@@ -1320,7 +1346,7 @@ object JumpAdHooks {
     }
 
     /**
-     * 详情页（帖子、评价、游戏详情）完整年份还原读取
+     * 详情页（帖子、评价、游戏详情）完整年份还原读取与一致性校验
      */
     private fun hookPostDateCacheRead(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
@@ -1345,7 +1371,7 @@ object JumpAdHooks {
 
                             val incoming = param.args.getOrNull(0) as? CharSequence ?: return
                             val incomingText = incoming.toString()
-                            if (incomingText.isBlank()) return
+                            if (incomingText.isBlank() || incomingText.contains("未知年份")) return
 
                             var newText = incomingText
 
@@ -1364,16 +1390,16 @@ object JumpAdHooks {
 
                             if (targetId != null) {
                                 val cachedDate = synchronized(postDateCache) { postDateCache[targetId] }
-                                if (cachedDate != null && !newText.contains(Regex("""\b\d{4}\b"""))) {
-                                    val datePattern = Regex("""\d{2}-\d{2}""")
-                                    if (datePattern.containsMatchIn(newText)) {
-                                        newText = newText.replaceFirst(datePattern, Regex.escapeReplacement(cachedDate))
+                                if (cachedDate != null && !REGEX_HAS_YEAR.containsMatchIn(newText)) {
+                                    val validated = applyValidatedYear(newText, cachedDate)
+                                    if (validated != null) {
+                                        newText = validated
                                     }
                                 }
                             }
 
                             if (newText.contains("image", ignoreCase = true)) {
-                                newText = newText.replace(Regex("""(?i)\s*image"""), "").trim()
+                                newText = newText.replace(REGEX_IMAGE_CLEAN, "").trim()
                             }
 
                             if (newText != incomingText) {
