@@ -88,7 +88,6 @@ object JumpAdHooks {
     private const val KEY_HIDE_VOUCHER_POPUP = "hide_voucher_popup"
     private const val KEY_EXP_BLOCK_OFFICIAL_PROMO_POST = "exp_block_official_promo_post"
     private const val KEY_BLOCKED_OFFICIAL_PROMO_COUNT = "blocked_official_promo_count"
-    private const val KEY_PROMO_BLOCK_SCOPE = "promo_block_scope"
 
     // 关键词屏蔽
     private const val KEY_ENABLE_KEYWORD_BLOCK = "enable_keyword_block"
@@ -589,24 +588,27 @@ object JumpAdHooks {
 
     private fun getBlockedMatchers(context: Context): List<KeywordMatcher> {
         cachedMatchers?.let { return it }
-        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_BLOCKED_KEYWORDS, "") ?: ""
-        val list = raw.split(",", "，", "\n")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .mapNotNull { word ->
-                if (word.startsWith("regex:")) {
-                    try {
-                        RegexKeywordMatcher(Regex(word.removePrefix("regex:")))
-                    } catch (_: Exception) {
-                        null
+        synchronized(this) {
+            cachedMatchers?.let { return it }
+            val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_BLOCKED_KEYWORDS, "") ?: ""
+            val list = raw.split(",", "，", "\n")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .mapNotNull { word ->
+                    if (word.startsWith("regex:")) {
+                        try {
+                            RegexKeywordMatcher(Regex(word.removePrefix("regex:")))
+                        } catch (_: Exception) {
+                            null
+                        }
+                    } else {
+                        PlainKeywordMatcher(word)
                     }
-                } else {
-                    PlainKeywordMatcher(word)
                 }
-            }
-        cachedMatchers = list
-        return list
+            cachedMatchers = list
+            return list
+        }
     }
 
     private fun hookBrvAdapters(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -853,13 +855,17 @@ object JumpAdHooks {
 
     private fun filterPromoList(list: MutableList<*>, isPromoEnabled: Boolean, isKeywordEnabled: Boolean): Boolean {
         val app = getValidAppContext()
-        val promoScope = app?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            ?.getString(KEY_PROMO_BLOCK_SCOPE, SCOPE_RECOMMEND) ?: SCOPE_RECOMMEND
         val keywordScope = app?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             ?.getString(KEY_KEYWORD_BLOCK_SCOPE, SCOPE_RECOMMEND) ?: SCOPE_RECOMMEND
 
-        val isFromRecommendStream = Thread.currentThread().stackTrace.any {
-            it.className.contains("CommunityRecommendViewModel")
+        // 堆栈前 25 层轻量深度扫描，快速判定是否在首页推荐流
+        val isFromRecommendStream = run {
+            val stack = Thread.currentThread().stackTrace
+            val limit = minOf(stack.size, 25)
+            for (i in 0 until limit) {
+                if (stack[i].className.contains("CommunityRecommendViewModel")) return@run true
+            }
+            false
         }
 
         val matchers = if (isKeywordEnabled && app != null) getBlockedMatchers(app) else emptyList()
@@ -869,18 +875,16 @@ object JumpAdHooks {
         while (iterator.hasNext()) {
             val item = iterator.next() ?: continue
 
-            // 1. 小酱与官方推广贴拦截
-            if (isPromoEnabled) {
-                val shouldCheckPromo = (promoScope == SCOPE_GLOBAL) || isFromRecommendStream
-                if (shouldCheckPromo && isOfficialPromoModel(item)) {
-                    iterator.remove()
-                    modified = true
-                    recordOfficialPromoBlockedDirect(item)
-                    continue
-                }
+            // 1. 小酱推广贴：锁定仅在推荐流剔除
+            if (isPromoEnabled && isFromRecommendStream && isOfficialPromoModel(item)) {
+                iterator.remove()
+                modified = true
+                recordOfficialPromoBlockedDirect(item)
+                log("✔ [数据层剔除] 推荐流命中官方推广规则，已移除条目")
+                continue
             }
 
-            // 2. 关键词拦截
+            // 2. 关键词拦截：按用户独立配置的作用域生效
             if (isKeywordEnabled && matchers.isNotEmpty()) {
                 val shouldCheckKeyword = (keywordScope == SCOPE_GLOBAL) || isFromRecommendStream
                 if (shouldCheckKeyword && isPostHitBlockedKeyword(item, matchers)) {
@@ -941,6 +945,14 @@ object JumpAdHooks {
         return null
     }
 
+    private fun safeGetObjectField(obj: Any, fieldName: String): Any? {
+        return try {
+            XposedHelpers.getObjectField(obj, fieldName)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     private fun initAppContext(context: Context) {
         if (appContextRef?.get() == null) {
             appContextRef = WeakReference(context.applicationContext)
@@ -962,7 +974,9 @@ object JumpAdHooks {
     private fun recordOfficialPromoBlockedDirect(model: Any) {
         try {
             val content = safeCallStringGetter(model, "getContent") ?: ""
-            val adId = fieldAdId?.get(model)?.toString() ?: ""
+            val adId = safeGetObjectField(model, "adId")?.toString()
+                ?: fieldAdId?.get(model)?.toString()
+                ?: ""
             log("✔ [数据层剔除] 物理移除 Jump小酱推广帖子: adId=$adId, content=$content")
 
             val app = getValidAppContext()
@@ -1248,6 +1262,26 @@ object JumpAdHooks {
         if (activeTargetIds.isNotEmpty()) {
             activity.window?.decorView?.let { decorView ->
                 collapseTargetViews(decorView, activeTargetIds)
+            }
+        }
+
+        // 精准消除发现页探索栏顶部的 46px (12.27dp) 顽固白缝
+        if (isFeatureEnabled(activity, KEY_HIDE_DISCOVER_BANNER) || isFeatureEnabled(activity, KEY_HIDE_DISCOVER_TOP_AD)) {
+            val collapsingId = getCachedResId(activity, "collapsing_toolbar")
+            if (collapsingId != 0) {
+                activity.findViewById<ViewGroup>(collapsingId)?.let { ctl ->
+                    for (i in 0 until ctl.childCount) {
+                        val child = ctl.getChildAt(i)
+                        if (child != null && child.javaClass.name.contains("ConstraintLayout")) {
+                            val lp = child.layoutParams
+                            if (lp is ViewGroup.MarginLayoutParams && lp.topMargin > 0) {
+                                lp.topMargin = 0
+                                child.layoutParams = lp
+                                child.requestLayout()
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -1609,14 +1643,6 @@ object JumpAdHooks {
     /**
      * 辅助获取动态副标题文案
      */
-    private fun getPromoItemDesc(context: Context): String {
-        val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val count = sp.getInt(KEY_BLOCKED_OFFICIAL_PROMO_COUNT, 0)
-        val scope = sp.getString(KEY_PROMO_BLOCK_SCOPE, SCOPE_RECOMMEND) ?: SCOPE_RECOMMEND
-        val scopeStr = if (scope == SCOPE_RECOMMEND) "仅推荐流" else "全局生效"
-        return "已拦截 $count 次 · $scopeStr · 点击配置"
-    }
-
     private fun getKeywordItemDesc(context: Context): String {
         val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val rawKeywords = sp.getString(KEY_BLOCKED_KEYWORDS, "") ?: ""
@@ -1631,9 +1657,8 @@ object JumpAdHooks {
     @SuppressLint("SetTextI18n")
     private fun showFullscreenSettings(activity: Activity) {
         val prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val blockedPromoCount = prefs.getInt(KEY_BLOCKED_OFFICIAL_PROMO_COUNT, 0)
 
-        // 定义供动态更新的 TextView 引用
-        var promoDescView: TextView? = null
         var keywordDescView: TextView? = null
 
         val items = listOf(
@@ -1646,7 +1671,7 @@ object JumpAdHooks {
             SettingItem(KEY_HIDE_TOPIC_LIST, "隐藏顶部话题栏"),
             SettingItem(KEY_HIDE_BANNER, "屏蔽首页轮播广告"),
             SettingItem(KEY_HIDE_HOT_DISCUSS, "隐藏「Jumper热议」卡片"),
-            SettingItem(KEY_HIDE_POST_AD, "隐藏推荐流与帖子内嵌广告"),
+            SettingItem(KEY_HIDE_POST_AD, "屏蔽推荐流与帖子内嵌广告"),
             SettingItem(KEY_HIDE_PUBLISH_TOPIC, "隐藏发布按钮"),
 
             SectionHeader("发现"),
@@ -1676,16 +1701,6 @@ object JumpAdHooks {
 
             SectionHeader("实验性功能"),
             ConfigurableSettingItem(
-                KEY_EXP_BLOCK_OFFICIAL_PROMO_POST,
-                "屏蔽 Jump小酱推广贴",
-                desc = getPromoItemDesc(activity),
-                bindDescView = { promoDescView = it }
-            ) {
-                showPromoScopeConfigDialog(activity) {
-                    promoDescView?.text = getPromoItemDesc(activity)
-                }
-            },
-            ConfigurableSettingItem(
                 KEY_ENABLE_KEYWORD_BLOCK,
                 "屏蔽帖子指定关键词",
                 desc = getKeywordItemDesc(activity),
@@ -1694,7 +1709,12 @@ object JumpAdHooks {
                 showKeywordConfigDialog(activity) {
                     keywordDescView?.text = getKeywordItemDesc(activity)
                 }
-            }
+            },
+            SettingItem(
+                KEY_EXP_BLOCK_OFFICIAL_PROMO_POST,
+                "屏蔽推荐流小酱推广贴",
+                desc = "累计屏蔽: ${blockedPromoCount} 次"
+            )
         )
 
         val dp = { value: Int -> (value * activity.resources.displayMetrics.density).toInt() }
@@ -1968,7 +1988,6 @@ object JumpAdHooks {
 
                     rowLayout.addView(textContainer)
                     rowLayout.addView(switchView)
-
                     rowLayout.setOnClickListener { entry.onConfigClick() }
 
                     currentCardLayout?.addView(rowLayout)
@@ -2069,157 +2088,7 @@ object JumpAdHooks {
     }
 
     /**
-     * 小酱推广拦截作用域配置弹窗
-     */
-    private fun showPromoScopeConfigDialog(activity: Activity, onSaved: () -> Unit) {
-        val prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        var currentScope = prefs.getString(KEY_PROMO_BLOCK_SCOPE, SCOPE_RECOMMEND) ?: SCOPE_RECOMMEND
-
-        val dp = { value: Int -> (value * activity.resources.displayMetrics.density).toInt() }
-        val isDark = (activity.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
-                android.content.res.Configuration.UI_MODE_NIGHT_YES
-
-        val dialog = Dialog(activity)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-
-        val dialogBg = if (isDark) Color.parseColor("#202022") else Color.parseColor("#FFFFFF")
-        val inputBg = if (isDark) Color.parseColor("#2C2C2E") else Color.parseColor("#F5F5F7")
-        val primaryText = if (isDark) Color.parseColor("#F5F5F7") else Color.parseColor("#1D1D1F")
-        val secondaryText = if (isDark) Color.parseColor("#8E8E93") else Color.parseColor("#86868B")
-        val accentRed = Color.parseColor("#FF5252")
-
-        val root = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(22), dp(22), dp(18))
-            background = GradientDrawable().apply {
-                setColor(dialogBg)
-                cornerRadius = dp(22).toFloat()
-            }
-            layoutParams = ViewGroup.LayoutParams(dp(340), ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-
-        val title = TextView(activity).apply {
-            text = "屏蔽小酱推广贴"
-            textSize = 17.5f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(primaryText)
-        }
-        root.addView(title)
-
-        val desc = TextView(activity).apply {
-            text = "选择拦截生效的场景。推荐流拦截可净化主页信息流，全局生效会额外拦截关注与个人主页中的推广动态。"
-            textSize = 12f
-            setTextColor(secondaryText)
-            setPadding(0, dp(8), 0, dp(14))
-        }
-        root.addView(desc)
-
-        val scopeContainer = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38))
-            background = GradientDrawable().apply {
-                setColor(inputBg)
-                cornerRadius = dp(10).toFloat()
-            }
-            setPadding(dp(3), dp(3), dp(3), dp(3))
-        }
-
-        val btnRecommend = TextView(activity).apply {
-            text = "仅推荐流"
-            textSize = 12.5f
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-        }
-
-        val btnGlobal = TextView(activity).apply {
-            text = "全局生效"
-            textSize = 12.5f
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-        }
-
-        fun updateScopeViews() {
-            if (currentScope == SCOPE_RECOMMEND) {
-                btnRecommend.setTextColor(Color.WHITE)
-                btnRecommend.setTypeface(null, Typeface.BOLD)
-                btnRecommend.background = GradientDrawable().apply {
-                    setColor(accentRed)
-                    cornerRadius = dp(8).toFloat()
-                }
-
-                btnGlobal.setTextColor(secondaryText)
-                btnGlobal.setTypeface(null, Typeface.NORMAL)
-                btnGlobal.background = null
-            } else {
-                btnGlobal.setTextColor(Color.WHITE)
-                btnGlobal.setTypeface(null, Typeface.BOLD)
-                btnGlobal.background = GradientDrawable().apply {
-                    setColor(accentRed)
-                    cornerRadius = dp(8).toFloat()
-                }
-
-                btnRecommend.setTextColor(secondaryText)
-                btnRecommend.setTypeface(null, Typeface.NORMAL)
-                btnRecommend.background = null
-            }
-        }
-
-        btnRecommend.setOnClickListener {
-            currentScope = SCOPE_RECOMMEND
-            updateScopeViews()
-        }
-
-        btnGlobal.setOnClickListener {
-            currentScope = SCOPE_GLOBAL
-            updateScopeViews()
-        }
-
-        updateScopeViews()
-        scopeContainer.addView(btnRecommend)
-        scopeContainer.addView(btnGlobal)
-        root.addView(scopeContainer)
-
-        val btnLayout = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.topMargin = dp(20)
-            layoutParams = lp
-        }
-
-        val cancelBtn = TextView(activity).apply {
-            text = "取消"
-            textSize = 14f
-            setPadding(dp(16), dp(8), dp(16), dp(8))
-            setTextColor(secondaryText)
-            setOnClickListener { dialog.dismiss() }
-        }
-
-        val saveBtn = TextView(activity).apply {
-            text = "保存"
-            textSize = 14f
-            setTypeface(null, Typeface.BOLD)
-            setPadding(dp(18), dp(8), dp(18), dp(8))
-            setTextColor(accentRed)
-            setOnClickListener {
-                prefs.edit().putString(KEY_PROMO_BLOCK_SCOPE, currentScope).apply()
-                Toast.makeText(activity, "配置已保存", Toast.LENGTH_SHORT).show()
-                onSaved()
-                dialog.dismiss()
-            }
-        }
-
-        btnLayout.addView(cancelBtn)
-        btnLayout.addView(saveBtn)
-        root.addView(btnLayout)
-
-        dialog.setContentView(root)
-        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        dialog.show()
-    }
-
-    /**
-     * 优雅高级的关键词配置弹窗
+     * 关键词配置弹窗（统一采用 308dp 物理限制与属性赋值，增加软键盘防挤压）
      */
     private fun showKeywordConfigDialog(activity: Activity, onSaved: () -> Unit) {
         val prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -2241,35 +2110,33 @@ object JumpAdHooks {
 
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(22), dp(22), dp(18))
+            setPadding(dp(20), dp(20), dp(20), dp(16))
             background = GradientDrawable().apply {
                 setColor(dialogBg)
-                cornerRadius = dp(22).toFloat()
+                cornerRadius = dp(20).toFloat()
             }
-            layoutParams = ViewGroup.LayoutParams(dp(340), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
-        val title = TextView(activity).apply {
+        val titleView = TextView(activity).apply {
             text = "屏蔽指定关键词"
-            textSize = 17.5f
+            textSize = 17f
             setTypeface(null, Typeface.BOLD)
             setTextColor(primaryText)
         }
-        root.addView(title)
+        root.addView(titleView)
 
         val scopeTitle = TextView(activity).apply {
             text = "生效范围"
             textSize = 12f
             setTypeface(null, Typeface.BOLD)
             setTextColor(secondaryText)
-            setPadding(0, dp(14), 0, dp(6))
+            setPadding(0, dp(12), 0, dp(6))
         }
         root.addView(scopeTitle)
 
-        // 作用域选择药丸按钮组
         val scopeContainer = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36))
             background = GradientDrawable().apply {
                 setColor(inputBg)
                 cornerRadius = dp(10).toFloat()
@@ -2337,11 +2204,11 @@ object JumpAdHooks {
             textSize = 12f
             setTypeface(null, Typeface.BOLD)
             setTextColor(secondaryText)
-            setPadding(0, dp(14), 0, dp(6))
+            setPadding(0, dp(12), 0, dp(6))
         }
         root.addView(kwTitle)
 
-        val editText = EditText(activity).apply {
+        val editTextView = EditText(activity).apply {
             hint = "多个词用逗号或换行分隔\n支持前缀 regex: 如 regex:^抽奖.*"
             setText(currentKeywords)
             textSize = 13f
@@ -2349,43 +2216,46 @@ object JumpAdHooks {
             setHintTextColor(Color.parseColor("#777777"))
             minLines = 4
             gravity = Gravity.TOP
-            setPadding(dp(14), dp(12), dp(14), dp(12))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             background = GradientDrawable().apply {
                 setColor(inputBg)
-                cornerRadius = dp(12).toFloat()
+                cornerRadius = dp(10).toFloat()
             }
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(100))
-            lp.bottomMargin = dp(18)
-            layoutParams = lp
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(96))
+            root.addView(this, lp)
         }
-        root.addView(editText)
 
         val btnLayout = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(16)
+            layoutParams = lp
         }
 
         val cancelBtn = TextView(activity).apply {
             text = "取消"
             textSize = 14f
-            setPadding(dp(16), dp(8), dp(16), dp(8))
+            setPadding(dp(14), dp(8), dp(14), dp(8))
             setTextColor(secondaryText)
             setOnClickListener { dialog.dismiss() }
         }
 
         val saveBtn = TextView(activity).apply {
-            text = "完成并应用"
+            text = "保存"
             textSize = 14f
             setTypeface(null, Typeface.BOLD)
-            setPadding(dp(18), dp(8), dp(18), dp(8))
+            setPadding(dp(16), dp(8), dp(16), dp(8))
             setTextColor(accentRed)
             setOnClickListener {
-                val text = editText.text.toString().trim()
+                val text = editTextView.text.toString().trim()
                 prefs.edit()
                     .putString(KEY_BLOCKED_KEYWORDS, text)
                     .putString(KEY_KEYWORD_BLOCK_SCOPE, currentScope)
                     .apply()
-                cachedMatchers = null
+                synchronized(this@JumpAdHooks) {
+                    cachedMatchers = null
+                }
                 Toast.makeText(activity, "屏蔽配置已更新", Toast.LENGTH_SHORT).show()
                 onSaved()
                 dialog.dismiss()
@@ -2399,6 +2269,16 @@ object JumpAdHooks {
         dialog.setContentView(root)
         dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         dialog.show()
+
+        // 物理锁定窗口属性尺寸，防止软键盘挤压或特定 ROM 测量冲刷
+        dialog.window?.let { win ->
+            @Suppress("DEPRECATION")
+            win.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            val lp = win.attributes
+            lp.width = dp(308)
+            lp.height = WindowManager.LayoutParams.WRAP_CONTENT
+            win.attributes = lp
+        }
     }
 
     /**
