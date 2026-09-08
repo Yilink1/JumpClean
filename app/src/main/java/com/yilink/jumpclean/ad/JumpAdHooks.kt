@@ -256,7 +256,7 @@ object JumpAdHooks {
                         override fun beforeHookedMethod(param: MethodHookParam) {
                             if (isFeatureEnabledSafe(lpparam.classLoader, KEY_HIDE_VOUCHER_POPUP)) {
                                 param.result = null
-                                log("✔ [源头阻断] 拦截优惠券弹窗请求: ${vmClass.simpleName}.${method.name}")
+                                log("✔ [源头阻断] 拦截营销弹窗请求: ${vmClass.simpleName}.${method.name}")
                             }
                         }
                     })
@@ -264,7 +264,7 @@ object JumpAdHooks {
                 }
             }
             if (hooked) {
-                log("✔ 屏蔽神券弹窗 Hook 已就绪 ($className)")
+                log("✔ 屏蔽营销弹窗 Hook 已就绪 ($className)")
                 return
             }
         }
@@ -608,7 +608,6 @@ object JumpAdHooks {
                 }
             }
 
-            // 明确排除 onBindViewHolder，杜绝三参 payloads 误拦截引起的无谓开销与刷屏
             var hookCount = 0
             adapterClass.declaredMethods.forEach { method ->
                 if (method.name != "onBindViewHolder") {
@@ -631,7 +630,6 @@ object JumpAdHooks {
                         val context = itemView.context ?: return
                         initAppContext(context)
 
-                        // 列表条目统一执行安全无崩溃的年份一致性校验还原
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) {
                             restoreItemYearWithValidation(holder, itemView, context)
                         }
@@ -729,9 +727,6 @@ object JumpAdHooks {
         } catch (_: Throwable) {}
     }
 
-    /**
-     * 核心规则：利用静态单例正则比对月-日；相同则拼真实年份，不相同则标未知年份（防止把更新时间误覆盖为发布时间）
-     */
     private fun applyValidatedYear(currentText: String, fullDate: String): String? {
         val uiDateMatch = REGEX_MM_DD.find(currentText) ?: return null
         val uiMonthDay = uiDateMatch.value
@@ -746,9 +741,6 @@ object JumpAdHooks {
         }
     }
 
-    /**
-     * 列表条目（首页、评测、社区列表）通用年份还原
-     */
     private fun restoreItemYearWithValidation(holder: Any, itemView: View, context: Context) {
         try {
             val tvDateId = getCachedResId(context, "tvDate").takeIf { it != 0 }
@@ -758,11 +750,9 @@ object JumpAdHooks {
             val tvDate = itemView.findViewById<TextView>(tvDateId) ?: return
 
             val currentText = tvDate.text?.toString() ?: return
-            // 快速断言：已有年份、包含未知年份或不是 MM-dd 格式，直接返回，绝不执行后续反射
             if (currentText.isBlank() || REGEX_HAS_YEAR.containsMatchIn(currentText) || currentText.contains("未知年份")) return
             if (!REGEX_MM_DD.containsMatchIn(currentText)) return
 
-            // 1. 穿透读取：按当前 holder 实例安全遍历
             var targetModel: Any? = null
             var curClass: Class<*>? = holder.javaClass
             while (curClass != null && curClass != Any::class.java) {
@@ -779,7 +769,6 @@ object JumpAdHooks {
                 curClass = curClass.superclass
             }
 
-            // 2. 如果 holder 内部未装载，从 Adapter 数据容器兜底
             if (targetModel == null) {
                 try {
                     val adapter = XposedHelpers.callMethod(holder, "getBindingAdapter")
@@ -793,18 +782,12 @@ object JumpAdHooks {
                 } catch (_: Throwable) {}
             }
 
-            if (targetModel == null) {
-                log("[年份还原断点] 未找到Model: holder=${holder.javaClass.name}, 当前文本='$currentText'")
-                return
-            }
+            if (targetModel == null) return
 
             val fullDate = safeCallStringGetter(targetModel, "getPostTimeStr")
                 ?: safeGetObjectField(targetModel, "postTimeStr")?.toString()
 
-            if (fullDate.isNullOrBlank() || !REGEX_YEAR_PREFIX.containsMatchIn(fullDate)) {
-                log("[年份还原断点] Model无有效日期: 类名=${targetModel.javaClass.name}, 读取值='$fullDate'")
-                return
-            }
+            if (fullDate.isNullOrBlank() || !REGEX_YEAR_PREFIX.containsMatchIn(fullDate)) return
 
             val newText = applyValidatedYear(currentText, fullDate) ?: return
             tvDate.text = newText
@@ -816,6 +799,11 @@ object JumpAdHooks {
     }
 
     private fun filterPromoList(list: MutableList<*>): Boolean {
+        val isFromRecommendStream = Thread.currentThread().stackTrace.any {
+            it.className.contains("CommunityRecommendViewModel")
+        }
+        if (!isFromRecommendStream) return false
+
         var modified = false
         val iterator = list.iterator()
         while (iterator.hasNext()) {
@@ -1345,9 +1333,6 @@ object JumpAdHooks {
         }
     }
 
-    /**
-     * 详情页（帖子、评价、游戏详情）完整年份还原读取与一致性校验
-     */
     private fun hookPostDateCacheRead(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             XposedHelpers.findAndHookMethod(
@@ -1578,28 +1563,28 @@ object JumpAdHooks {
         val items = listOf(
             SectionHeader("启动与弹窗"),
             SettingItem(KEY_SKIP_SPLASH, "跳过开屏广告"),
-            SettingItem(KEY_HIDE_VOUCHER_POPUP, "屏蔽神券弹窗"),
+            SettingItem(KEY_HIDE_VOUCHER_POPUP, "屏蔽营销弹窗"),
             SettingItem(KEY_HIDE_MSG_PUSH_GUIDE, "屏蔽通知开启引导"),
 
             SectionHeader("首页"),
-            SettingItem(KEY_HIDE_TOPIC_LIST, "隐藏顶部话题"),
-            SettingItem(KEY_HIDE_BANNER, "隐藏首页轮播广告"),
-            SettingItem(KEY_HIDE_HOT_DISCUSS, "隐藏 Jumper 热议"),
+            SettingItem(KEY_HIDE_TOPIC_LIST, "隐藏顶部话题栏"),
+            SettingItem(KEY_HIDE_BANNER, "屏蔽首页轮播广告"),
+            SettingItem(KEY_HIDE_HOT_DISCUSS, "隐藏「Jumper热议」卡片"),
             SettingItem(KEY_HIDE_POST_AD, "隐藏推荐流与帖子内嵌广告"),
-            SettingItem(KEY_HIDE_PUBLISH_TOPIC, "隐藏发帖按钮"),
+            SettingItem(KEY_HIDE_PUBLISH_TOPIC, "隐藏发布按钮"),
 
             SectionHeader("发现"),
-            SettingItem(KEY_HIDE_DISCOVER_TOP_AD, "隐藏顶部广告"),
-            SettingItem(KEY_HIDE_DISCOVER_BANNER, "隐藏轮播广告"),
+            SettingItem(KEY_HIDE_DISCOVER_TOP_AD, "屏蔽顶部广告"),
+            SettingItem(KEY_HIDE_DISCOVER_BANNER, "屏蔽轮播广告"),
 
             SectionHeader("内容与详情"),
-            SettingItem(KEY_ENABLE_COPY, "解除文本复制限制"),
-            SettingItem(KEY_RESTORE_POST_YEAR, "还原帖子完整年份"),
-            SettingItem(KEY_HIDE_CONTENT_MEMBER_MASK, "解锁游戏评价总结"),
+            SettingItem(KEY_ENABLE_COPY, "允许长按复制文本"),
+            SettingItem(KEY_RESTORE_POST_YEAR, "恢复帖子完整年份"),
+            SettingItem(KEY_HIDE_CONTENT_MEMBER_MASK, "查看游戏评价总结"),
 
             SectionHeader("个人中心"),
             SettingItem(KEY_HIDE_MEMBER_CARD, "隐藏 Jump+ 会员卡片"),
-            SettingItem(KEY_HIDE_MY_ORDER, "隐藏我的订单入口"),
+            SettingItem(KEY_HIDE_MY_ORDER, "隐藏「我的订单」"),
             SettingItem(KEY_HIDE_PHOTO_WALL, "隐藏截图展示墙"),
 
             SectionHeader("底栏与小组件"),
@@ -1616,7 +1601,7 @@ object JumpAdHooks {
             SectionHeader("实验性功能"),
             SettingItem(
                 KEY_EXP_BLOCK_OFFICIAL_PROMO_POST,
-                "屏蔽 Jump小酱推广帖子",
+                "屏蔽推荐流小酱推广贴",
                 desc = "累计屏蔽: ${blockedPromoCount} 次"
             )
         )
