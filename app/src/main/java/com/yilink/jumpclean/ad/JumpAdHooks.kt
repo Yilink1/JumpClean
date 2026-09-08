@@ -572,7 +572,6 @@ object JumpAdHooks {
                     val isExpEnabled = isFeatureEnabledSafe(lpparam.classLoader, KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
                     val isRestoreEnabled = isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)
 
-                    // 扫描所有入参，只要是集合类型（List 或 Collection）一律捕获并过滤
                     for (i in args.indices) {
                         val arg = args[i] ?: continue
                         if (arg is Collection<*>) {
@@ -601,16 +600,18 @@ object JumpAdHooks {
                 }
             }
 
-            // 动态扫描：凡是参数包含 Collection 或 List 的方法（包括加载更多 addModels / 各种带索引的重载方法），全线拦截
+            // 正确保留的优化：明确排除 onBindViewHolder，杜绝 payloads 误拦截引起的无谓开销与刷屏
             var hookCount = 0
             adapterClass.declaredMethods.forEach { method ->
-                val hasCollectionParam = method.parameterTypes.any { Collection::class.java.isAssignableFrom(it) }
-                if (hasCollectionParam) {
-                    try {
-                        XposedBridge.hookMethod(method, filterDataHook)
-                        hookCount++
-                        log("[Adapter方法挂载成功] 拦截数据方法: ${method.name}(${method.parameterTypes.joinToString { it.simpleName }})")
-                    } catch (_: Throwable) {}
+                if (method.name != "onBindViewHolder") {
+                    val hasCollectionParam = method.parameterTypes.any { Collection::class.java.isAssignableFrom(it) }
+                    if (hasCollectionParam) {
+                        try {
+                            XposedBridge.hookMethod(method, filterDataHook)
+                            hookCount++
+                            log("[Adapter方法挂载成功] 拦截数据方法: ${method.name}(${method.parameterTypes.joinToString { it.simpleName }})")
+                        } catch (_: Throwable) {}
+                    }
                 }
             }
 
@@ -622,7 +623,6 @@ object JumpAdHooks {
                         val context = itemView.context ?: return
                         initAppContext(context)
 
-                        // 首页推荐流列表条目年份还原（带诊断探针版本）
                         if (isFeatureEnabledSafe(lpparam.classLoader, KEY_RESTORE_POST_YEAR)) {
                             restoreHomeItemYearWithProbe(holder, itemView, context)
                         }
@@ -689,9 +689,6 @@ object JumpAdHooks {
         }
     }
 
-    /**
-     * 数据流入时，全量解析并缓存年份
-     */
     private fun cacheDatesFromRawCollection(collection: Collection<*>) {
         try {
             for (item in collection) {
@@ -722,7 +719,7 @@ object JumpAdHooks {
     }
 
     /**
-     * 首页列表条目还原年份（带清晰诊断探针，彻底告别盲猜）
+     * 还原年份：彻底移除跨类的全局静态 Field 缓存，每个条目独立安全遍历，兼顾兼容性与准确性
      */
     private fun restoreHomeItemYearWithProbe(holder: Any, itemView: View, context: Context) {
         try {
@@ -738,8 +735,9 @@ object JumpAdHooks {
             val datePattern = Regex("""\d{2}-\d{2}""")
             if (!datePattern.containsMatchIn(currentText)) return
 
-            // 1. 穿透读取：直接从 holder 的成员字段中寻找真实的业务模型
             var targetModel: Any? = null
+
+            // 1. 穿透读取：遍历当前 holder 的所有成员字段寻找模型
             var curClass: Class<*>? = holder.javaClass
             while (curClass != null && curClass != Any::class.java) {
                 for (f in curClass.declaredFields) {
@@ -755,7 +753,7 @@ object JumpAdHooks {
                 curClass = curClass.superclass
             }
 
-            // 2. 如果 holder 肚子里没有，尝试通过 Adapter 的数据容器兜底
+            // 2. 如果 holder 里没有，从 Adapter 数据容器兜底
             if (targetModel == null) {
                 try {
                     val adapter = XposedHelpers.callMethod(holder, "getBindingAdapter")
@@ -769,7 +767,6 @@ object JumpAdHooks {
                 } catch (_: Throwable) {}
             }
 
-            // 3. 诊断探针：观察 Model 捕获情况
             if (targetModel == null) {
                 log("[年份还原断点] 未找到Model: holder=${holder.javaClass.name}, 当前文本='$currentText'")
                 return
@@ -830,14 +827,12 @@ object JumpAdHooks {
                 fieldUserNameStr = findFieldRecursively(clazz, "userNameStr")
             }
 
-            // 广告标记判定
             val adType = fieldAdType?.get(model)
             val adId = fieldAdId?.get(model)
             if (adType != null || adId != null) {
                 return true
             }
 
-            // 小酱马甲识别
             val nickname = safeCallStringGetter(model, "getCustomNickname")
                 ?: safeCallStringGetter(model, "getUserNameStr")
                 ?: fieldCustomNickname?.get(model)?.toString()
