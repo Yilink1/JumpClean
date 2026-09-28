@@ -265,7 +265,7 @@ object SettingsDialog {
                             prefs.edit().putBoolean(entry.key, checked).apply()
                             ViewCleanHooks.applyAllUIVisibility(activity)
                             if (entry.key in restartRequiredKeys) {
-                                showRestartPrompt(activity, entry.title, isDark, dp)
+                                showRestartPrompt(activity, isDark, dp)
                             }
                         }
                     }
@@ -314,7 +314,7 @@ object SettingsDialog {
                             prefs.edit().putBoolean(entry.key, checked).apply()
                             ViewCleanHooks.applyAllUIVisibility(activity)
                             if (entry.key in restartRequiredKeys) {
-                                showRestartPrompt(activity, entry.title, isDark, dp)
+                                showRestartPrompt(activity, isDark, dp)
                             }
                         }
                     }
@@ -419,7 +419,7 @@ object SettingsDialog {
         }
     }
 
-    private fun showRestartPrompt(activity: Activity, titleStr: String, isDark: Boolean, dp: (Int) -> Int) {
+    private fun showRestartPrompt(activity: Activity, isDark: Boolean, dp: (Int) -> Int) {
         val promptDialog = Dialog(activity).apply {
             requestWindowFeature(Window.FEATURE_NO_TITLE)
             window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -430,16 +430,18 @@ object SettingsDialog {
         val secondaryText = if (isDark) Color.parseColor("#8E8E93") else Color.parseColor("#8A8A8E")
         val cancelBtnBg = if (isDark) Color.parseColor("#323236") else Color.parseColor("#F0F0F2")
         val cancelBtnText = if (isDark) Color.parseColor("#D1D1D6") else Color.parseColor("#636366")
-        val accentColor = Color.parseColor("#E60012") // 任天堂红 Nintendo Red
+        val accentColor = Color.parseColor("#E54D42") // 柔和温润的 Jump 珊瑚红
 
         val card = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            minimumWidth = dp(300)
             background = GradientDrawable().apply {
                 setColor(cardBg)
-                cornerRadius = dp(18).toFloat()
+                cornerRadius = dp(20).toFloat()
             }
-            setPadding(dp(22), dp(20), dp(22), dp(18))
-            layoutParams = ViewGroup.LayoutParams(dp(290), ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(22), dp(22), dp(22), dp(18))
+            layoutParams = ViewGroup.LayoutParams(dp(300), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
         val titleView = TextView(activity).apply {
@@ -447,48 +449,56 @@ object SettingsDialog {
             textSize = 17f
             setTypeface(null, Typeface.BOLD)
             setTextColor(primaryText)
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
         val descView = TextView(activity).apply {
-            text = "「$titleStr」需重启 App 后生效，是否立即重启？"
+            text = "此项改动需重启后生效"
             textSize = 13.5f
             setTextColor(secondaryText)
+            gravity = Gravity.CENTER
+            textAlignment = View.TEXT_ALIGNMENT_CENTER
             setLineSpacing(dp(3).toFloat(), 1f)
-            setPadding(0, dp(10), 0, dp(20))
+            setPadding(dp(6), dp(10), dp(6), dp(20))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
         val btnContainer = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
         val cancelBtn = TextView(activity).apply {
             text = "稍后"
-            textSize = 13.5f
+            textSize = 14f
             setTypeface(null, Typeface.BOLD)
             setTextColor(cancelBtnText)
             gravity = Gravity.CENTER
-            setPadding(dp(18), dp(9), dp(18), dp(9))
+            setPadding(0, dp(10), 0, dp(10))
             background = GradientDrawable().apply {
                 setColor(cancelBtnBg)
                 cornerRadius = dp(12).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(6)
             }
             setOnClickListener { promptDialog.dismiss() }
         }
 
         val restartBtn = TextView(activity).apply {
             text = "立即重启"
-            textSize = 13.5f
+            textSize = 14f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(dp(18), dp(9), dp(18), dp(9))
+            setPadding(0, dp(10), 0, dp(10))
             background = GradientDrawable().apply {
                 setColor(accentColor)
                 cornerRadius = dp(12).toFloat()
             }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                marginStart = dp(10)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(6)
             }
             setOnClickListener {
                 promptDialog.dismiss()
@@ -505,6 +515,10 @@ object SettingsDialog {
 
         promptDialog.setContentView(card)
         promptDialog.show()
+        promptDialog.window?.let { win ->
+            win.setLayout(dp(300), ViewGroup.LayoutParams.WRAP_CONTENT)
+            win.setGravity(Gravity.CENTER)
+        }
     }
 
     private fun restartApp(activity: Activity) {
