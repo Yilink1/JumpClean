@@ -1,6 +1,6 @@
 package com.yilink.jumpclean
 
-import com.yilink.jumpclean.ad.JumpAdHooks
+import com.yilink.jumpclean.hooks.JumpHooks
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XC_MethodReplacement
 import de.robv.android.xposed.XposedHelpers
@@ -12,7 +12,7 @@ class MainHook : IXposedHookLoadPackage {
         // 1. 宿主拦截
         if (lpparam.packageName == "com.vgjump.jump") {
             HookUtils.log("Target loaded: ${lpparam.packageName}")
-            JumpAdHooks.hook(lpparam)
+            JumpHooks.hook(lpparam)
             return
         }
 

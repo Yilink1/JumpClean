@@ -1,18 +1,13 @@
-package com.yilink.jumpclean.ad
+package com.yilink.jumpclean.hooks
 
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
-import com.yilink.jumpclean.hooks.FeatureHooks
-import com.yilink.jumpclean.hooks.FeedHooks
-import com.yilink.jumpclean.hooks.SettingsEntryHooks
-import com.yilink.jumpclean.hooks.SplashHooks
-import com.yilink.jumpclean.hooks.ViewCleanHooks
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 /**
  * JumpClean — Jump App 界面净化与体验增强总调度器
  */
-object JumpAdHooks {
+object JumpHooks {
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (lpparam.packageName != JumpConstants.TARGET_PACKAGE) return
