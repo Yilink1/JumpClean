@@ -20,6 +20,7 @@ object ViewCleanHooks {
     @Volatile private var cachedRedDotId = 0
     @Volatile private var cachedLotteryTabId = 0
     @Volatile private var cachedWebTabId = 0
+    @Volatile private var lotteryTabWasHidden = false
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookMainActivityUI(lpparam)
@@ -108,21 +109,35 @@ object ViewCleanHooks {
             ).forEach { (idName, prefKey) ->
                 val isEnabled = ConfigManager.isFeatureEnabled(activity, prefKey)
                 HookUtils.getCachedResId(activity, idName).takeIf { it != 0 }?.let { id ->
-                    val tabView = activity.findViewById<View>(id)
+                    val tabView = activity.findViewById<View>(id) ?: return@let
                     if (isEnabled) {
-                        tabView?.let { HookUtils.hidePersistently(it) }
+                        if (tabView.visibility != View.GONE) {
+                            tabView.visibility = View.GONE
+                        }
                     } else {
-                        tabView?.visibility = View.VISIBLE
+                        if (tabView.visibility != View.VISIBLE) {
+                            tabView.visibility = View.VISIBLE
+                        }
                     }
                 }
             }
+
             val lotteryHidden = ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_LOTTERY_TAB)
-            HookUtils.getCachedResId(activity, "vRedDot").takeIf { it != 0 }?.let { id ->
-                activity.findViewById<View>(id)?.let { redDot ->
-                    if (lotteryHidden) {
-                        HookUtils.collapseView(redDot)
-                    } else {
-                        HookUtils.restoreView(redDot)
+            if (lotteryHidden) {
+                lotteryTabWasHidden = true
+                HookUtils.getCachedResId(activity, "vRedDot").takeIf { it != 0 }?.let { id ->
+                    activity.findViewById<View>(id)?.let { redDot ->
+                        if (redDot.visibility != View.GONE) redDot.visibility = View.GONE
+                    }
+                }
+            } else {
+                if (lotteryTabWasHidden) {
+                    lotteryTabWasHidden = false
+                    // 仅在用户从设置里取消隐藏的这一瞬间，如果原来有红点则单次恢复，后续绝不轮询干预
+                    HookUtils.getCachedResId(activity, "vRedDot").takeIf { it != 0 }?.let { id ->
+                        activity.findViewById<View>(id)?.let { redDot ->
+                            if (redDot.visibility != View.VISIBLE) redDot.visibility = View.VISIBLE
+                        }
                     }
                 }
             }
@@ -142,18 +157,21 @@ object ViewCleanHooks {
 
             val activeTargetIds = HashSet<Int>()
             val restoreTargetIds = HashSet<Int>()
+            val hasAnyCollapsed = HookUtils.hasCollapsedViews()
             targets.forEach { (idName, prefKey) ->
                 HookUtils.getCachedResId(activity, idName).takeIf { it != 0 }?.let { id ->
                     if (ConfigManager.isFeatureEnabled(activity, prefKey)) {
                         activeTargetIds.add(id)
-                    } else {
+                    } else if (hasAnyCollapsed) {
                         restoreTargetIds.add(id)
                     }
                 }
             }
 
-            activity.window?.decorView?.let { decorView ->
-                applyTargetViewsVisibility(decorView, activeTargetIds, restoreTargetIds)
+            if (activeTargetIds.isNotEmpty() || restoreTargetIds.isNotEmpty()) {
+                activity.window?.decorView?.let { decorView ->
+                    applyTargetViewsVisibility(decorView, activeTargetIds, restoreTargetIds)
+                }
             }
 
             // 精准消除发现页探索栏顶部的 46px (12.27dp) 顽固白缝
@@ -185,7 +203,7 @@ object ViewCleanHooks {
                     (buyBtn.parent as? View)?.let { memberContainer ->
                         if (memberCardEnabled) {
                             HookUtils.collapseView(memberContainer)
-                        } else {
+                        } else if (HookUtils.isCollapsed(memberContainer)) {
                             HookUtils.restoreView(memberContainer)
                         }
                     }
@@ -199,7 +217,7 @@ object ViewCleanHooks {
     private fun applyTargetViewsVisibility(view: View, targetIds: Set<Int>, restoreIds: Set<Int>) {
         if (targetIds.contains(view.id)) {
             HookUtils.collapseView(view)
-        } else if (restoreIds.contains(view.id)) {
+        } else if (restoreIds.contains(view.id) && HookUtils.isCollapsed(view)) {
             HookUtils.restoreView(view)
         }
         if (view is ViewGroup) {
@@ -278,7 +296,9 @@ object ViewCleanHooks {
                             val now = SystemClock.uptimeMillis()
                             if (now - lastDetailLayoutTime >= JumpConstants.THROTTLE_INTERVAL_MS) {
                                 lastDetailLayoutTime = now
-                                applyContentDetailMemberMaskHide(activity)
+                                if (ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_CONTENT_MEMBER_MASK)) {
+                                    applyContentDetailMemberMaskHide(activity)
+                                }
                             }
                         }
                 } catch (e: Exception) {
@@ -302,6 +322,7 @@ object ViewCleanHooks {
 
     fun applyContentDetailMemberMaskHide(activity: Activity) {
         val enabled = ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_CONTENT_MEMBER_MASK)
+        if (!enabled && !HookUtils.hasCollapsedViews()) return
         try {
             val targetMaskNames = listOf(
                 "clMemberMask",
@@ -318,7 +339,7 @@ object ViewCleanHooks {
                     activity.findViewById<View>(resId)?.let { view ->
                         if (enabled) {
                             HookUtils.collapseView(view)
-                        } else {
+                        } else if (HookUtils.isCollapsed(view)) {
                             HookUtils.restoreView(view)
                         }
                     }

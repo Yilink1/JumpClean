@@ -29,6 +29,9 @@ object HookUtils {
 
     private val collapsedViewStates = WeakHashMap<View, ViewOriginalState>()
 
+    fun isCollapsed(view: View): Boolean = collapsedViewStates.containsKey(view)
+    fun hasCollapsedViews(): Boolean = collapsedViewStates.isNotEmpty()
+
     fun log(msg: String) {
         XposedBridge.log("[$TAG] $msg")
     }
@@ -80,34 +83,25 @@ object HookUtils {
     }
 
     fun restoreView(view: View) {
-        val state = collapsedViewStates.remove(view)
+        val state = collapsedViewStates.remove(view) ?: return
         view.visibility = View.VISIBLE
         view.isEnabled = true
         view.isClickable = true
         view.isLongClickable = true
         view.isFocusable = true
-        if (state != null) {
-            val params = view.layoutParams
-            if (params != null) {
-                params.height = state.height
-                params.width = state.width
-                if (params is ViewGroup.MarginLayoutParams) {
-                    params.topMargin = state.topMargin
-                    params.bottomMargin = state.bottomMargin
-                    params.leftMargin = state.leftMargin
-                    params.rightMargin = state.rightMargin
-                }
-                view.layoutParams = params
+        val params = view.layoutParams
+        if (params != null) {
+            params.height = state.height
+            params.width = state.width
+            if (params is ViewGroup.MarginLayoutParams) {
+                params.topMargin = state.topMargin
+                params.bottomMargin = state.bottomMargin
+                params.leftMargin = state.leftMargin
+                params.rightMargin = state.rightMargin
             }
-            view.setPadding(state.paddingLeft, state.paddingTop, state.paddingRight, state.paddingBottom)
-        } else {
-            val params = view.layoutParams
-            if (params != null && (params.height == 0 || params.width == 0)) {
-                if (params.height == 0) params.height = ViewGroup.LayoutParams.WRAP_CONTENT
-                if (params.width == 0) params.width = ViewGroup.LayoutParams.WRAP_CONTENT
-                view.layoutParams = params
-            }
+            view.layoutParams = params
         }
+        view.setPadding(state.paddingLeft, state.paddingTop, state.paddingRight, state.paddingBottom)
         view.requestLayout()
         (view.parent as? View)?.requestLayout()
         view.invalidate()
