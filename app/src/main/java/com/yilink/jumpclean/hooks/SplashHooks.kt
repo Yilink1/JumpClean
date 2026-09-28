@@ -68,26 +68,36 @@ object SplashHooks {
             "com.vgjump.jump.ui.main.launch.SplashActivity", lpparam.classLoader
         ) ?: return
 
+        val jumpAction: (Activity) -> Unit = { activity ->
+            ConfigManager.initAppContext(activity)
+            processStartTime = SystemClock.uptimeMillis()
+            mainActivitySeen = false
+            val isRestartFromIcon = activity.intent?.getBooleanExtra(JumpConstants.EXTRA_ICON_RESTART, false) == true
+            val isSkipEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_SKIP_SPLASH)
+
+            if ((isRestartFromIcon || isSkipEnabled) && !activity.isFinishing) {
+                try {
+                    val mainIntent = Intent().apply {
+                        setClassName(activity.packageName, "com.vgjump.jump.ui.main.MainActivity")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    activity.startActivity(mainIntent)
+                    activity.finish()
+                    ConfigManager.log("✔ 瞬时穿透 SplashActivity 成功 (热/冷启动加速)")
+                } catch (e: Exception) {
+                    ConfigManager.logError("瞬跳 MainActivity 失败", e)
+                }
+            }
+        }
+
         XposedBridge.hookAllMethods(splashClass, "onCreate", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
-                val activity = param.thisObject as? Activity ?: return
-                ConfigManager.initAppContext(activity)
-                val isRestartFromIcon = activity.intent?.getBooleanExtra(JumpConstants.EXTRA_ICON_RESTART, false) == true
-                val isSkipEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_SKIP_SPLASH)
-
-                if (isRestartFromIcon || isSkipEnabled) {
-                    try {
-                        val mainIntent = Intent().apply {
-                            setClassName(activity.packageName, "com.vgjump.jump.ui.main.MainActivity")
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                        }
-                        activity.startActivity(mainIntent)
-                        activity.finish()
-                        ConfigManager.log("✔ 瞬时穿透 SplashActivity 成功")
-                    } catch (e: Exception) {
-                        ConfigManager.logError("瞬跳 MainActivity 失败", e)
-                    }
-                }
+                (param.thisObject as? Activity)?.let { jumpAction(it) }
+            }
+        })
+        XposedBridge.hookAllMethods(splashClass, "onResume", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                (param.thisObject as? Activity)?.let { jumpAction(it) }
             }
         })
         ConfigManager.log("✔ SplashActivity 穿透 Hook 已就绪")
@@ -221,6 +231,9 @@ object SplashHooks {
                         val name = act.javaClass.name
                         if (name.contains("MainActivity")) {
                             mainActivitySeen = true
+                        } else if (name.contains("SplashActivity")) {
+                            mainActivitySeen = false
+                            processStartTime = SystemClock.uptimeMillis()
                         }
                     } catch (_: Exception) {}
                 }
@@ -231,6 +244,19 @@ object SplashHooks {
                         val act = param.thisObject as? Activity ?: return
                         ConfigManager.initAppContext(act)
                         currentActivityName = act.javaClass.name
+                    } catch (_: Exception) {}
+                }
+            })
+            XposedBridge.hookAllMethods(Activity::class.java, "onDestroy", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    try {
+                        val act = param.thisObject as? Activity ?: return
+                        val name = act.javaClass.name
+                        if (name.contains("MainActivity")) {
+                            mainActivitySeen = false
+                            processStartTime = SystemClock.uptimeMillis()
+                            ConfigManager.log("✔ MainActivity 退出销毁，重置启动加速探针")
+                        }
                     } catch (_: Exception) {}
                 }
             })

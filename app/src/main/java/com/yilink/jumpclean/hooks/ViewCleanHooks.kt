@@ -17,10 +17,49 @@ object ViewCleanHooks {
     private var lastMainLayoutTime = 0L
     private var lastDetailLayoutTime = 0L
 
+    @Volatile private var cachedRedDotId = 0
+    @Volatile private var cachedLotteryTabId = 0
+    @Volatile private var cachedWebTabId = 0
+
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookMainActivityUI(lpparam)
+        hookTabVisibilityIntercept(lpparam)
         hookAdViews(lpparam)
         hookContentDetailMemberMask(lpparam)
+    }
+
+    private fun hookTabVisibilityIntercept(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                View::class.java,
+                "setVisibility",
+                Int::class.javaPrimitiveType,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val view = param.thisObject as? View ?: return
+                        val id = view.id
+                        if (id <= 0) return
+
+                        if (cachedRedDotId != 0 && id == cachedRedDotId) {
+                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_LOTTERY_TAB)) {
+                                param.args[0] = View.GONE
+                            }
+                        } else if (cachedLotteryTabId != 0 && id == cachedLotteryTabId) {
+                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_LOTTERY_TAB)) {
+                                param.args[0] = View.GONE
+                            }
+                        } else if (cachedWebTabId != 0 && id == cachedWebTabId) {
+                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_WEB_TAB)) {
+                                param.args[0] = View.GONE
+                            }
+                        }
+                    }
+                }
+            )
+            ConfigManager.log("✔ 底栏与红点动态 setVisibility 阻断 Hook 已就绪")
+        } catch (e: Exception) {
+            ConfigManager.logError("✘ 底栏与红点 setVisibility 阻断 Hook 失败", e)
+        }
     }
 
     private fun hookMainActivityUI(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -32,6 +71,9 @@ object ViewCleanHooks {
                         try {
                             val activity = param.thisObject as Activity
                             ConfigManager.initAppContext(activity)
+                            cachedRedDotId = HookUtils.getCachedResId(activity, "vRedDot")
+                            cachedLotteryTabId = HookUtils.getCachedResId(activity, "lotteryTab")
+                            cachedWebTabId = HookUtils.getCachedResId(activity, "webTab")
                             applyAllUIVisibility(activity)
 
                             activity.window?.decorView?.rootView?.viewTreeObserver
@@ -56,6 +98,10 @@ object ViewCleanHooks {
 
     fun applyAllUIVisibility(activity: Activity) {
         try {
+            if (cachedRedDotId == 0) cachedRedDotId = HookUtils.getCachedResId(activity, "vRedDot")
+            if (cachedLotteryTabId == 0) cachedLotteryTabId = HookUtils.getCachedResId(activity, "lotteryTab")
+            if (cachedWebTabId == 0) cachedWebTabId = HookUtils.getCachedResId(activity, "webTab")
+
             mapOf(
                 "webTab" to JumpConstants.KEY_HIDE_WEB_TAB,
                 "lotteryTab" to JumpConstants.KEY_HIDE_LOTTERY_TAB
@@ -72,7 +118,13 @@ object ViewCleanHooks {
             }
             val lotteryHidden = ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_LOTTERY_TAB)
             HookUtils.getCachedResId(activity, "vRedDot").takeIf { it != 0 }?.let { id ->
-                activity.findViewById<View>(id)?.visibility = if (lotteryHidden) View.GONE else View.VISIBLE
+                activity.findViewById<View>(id)?.let { redDot ->
+                    if (lotteryHidden) {
+                        HookUtils.collapseView(redDot)
+                    } else {
+                        HookUtils.restoreView(redDot)
+                    }
+                }
             }
 
             val targets = mapOf(

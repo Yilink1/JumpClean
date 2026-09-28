@@ -79,7 +79,7 @@ object IconPickerDialog {
             rootLayout.addView(titleView)
 
             val tipView = TextView(activity).apply {
-                text = "切换后首次进入可能有开屏广告"
+                text = "点击切换并重启生效"
                 textSize = 11.5f
                 setTextColor(secondaryTextColor)
                 gravity = Gravity.CENTER

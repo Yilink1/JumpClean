@@ -199,12 +199,8 @@ object SettingsDialog {
 
         var currentCardLayout: LinearLayout? = null
 
-        val restartRequiredKeys = setOf(
-            JumpConstants.KEY_SKIP_SPLASH,
-            JumpConstants.KEY_HIDE_WEB_TAB,
-            JumpConstants.KEY_HIDE_LOTTERY_TAB,
-            JumpConstants.KEY_HIDE_MSG_PUSH_GUIDE
-        )
+        // 当前所有功能均已支持无感生效或下一次自然生效，暂无需要强制打断用户的开关
+        val restartRequiredKeys = emptySet<String>()
 
         items.forEach { entry ->
             when (entry) {
