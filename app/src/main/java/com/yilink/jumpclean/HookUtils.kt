@@ -6,12 +6,28 @@ import android.view.ViewGroup
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import java.lang.reflect.Field
+import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 
 object HookUtils {
     private const val TAG = "JumpClean"
     private val resIdCache = ConcurrentHashMap<String, Int>()
     private val RETRY_DELAYS_MS = longArrayOf(500L, 1500L, 3000L)
+
+    private data class ViewOriginalState(
+        val width: Int,
+        val height: Int,
+        val topMargin: Int,
+        val bottomMargin: Int,
+        val leftMargin: Int,
+        val rightMargin: Int,
+        val paddingTop: Int,
+        val paddingBottom: Int,
+        val paddingLeft: Int,
+        val paddingRight: Int
+    )
+
+    private val collapsedViewStates = WeakHashMap<View, ViewOriginalState>()
 
     fun log(msg: String) {
         XposedBridge.log("[$TAG] $msg")
@@ -23,6 +39,23 @@ object HookUtils {
     }
 
     fun collapseView(view: View, safeMode: Boolean = false) {
+        if (!collapsedViewStates.containsKey(view)) {
+            val params = view.layoutParams
+            val marginParams = params as? ViewGroup.MarginLayoutParams
+            collapsedViewStates[view] = ViewOriginalState(
+                width = params?.width ?: ViewGroup.LayoutParams.WRAP_CONTENT,
+                height = params?.height ?: ViewGroup.LayoutParams.WRAP_CONTENT,
+                topMargin = marginParams?.topMargin ?: 0,
+                bottomMargin = marginParams?.bottomMargin ?: 0,
+                leftMargin = marginParams?.leftMargin ?: 0,
+                rightMargin = marginParams?.rightMargin ?: 0,
+                paddingTop = view.paddingTop,
+                paddingBottom = view.paddingBottom,
+                paddingLeft = view.paddingLeft,
+                paddingRight = view.paddingRight
+            )
+        }
+
         if (view.visibility != View.GONE) view.visibility = View.GONE
         view.isEnabled = false
         view.isClickable = false
@@ -44,6 +77,40 @@ object HookUtils {
             }
             view.setPadding(0, 0, 0, 0)
         }
+    }
+
+    fun restoreView(view: View) {
+        val state = collapsedViewStates.remove(view)
+        view.visibility = View.VISIBLE
+        view.isEnabled = true
+        view.isClickable = true
+        view.isLongClickable = true
+        view.isFocusable = true
+        if (state != null) {
+            val params = view.layoutParams
+            if (params != null) {
+                params.height = state.height
+                params.width = state.width
+                if (params is ViewGroup.MarginLayoutParams) {
+                    params.topMargin = state.topMargin
+                    params.bottomMargin = state.bottomMargin
+                    params.leftMargin = state.leftMargin
+                    params.rightMargin = state.rightMargin
+                }
+                view.layoutParams = params
+            }
+            view.setPadding(state.paddingLeft, state.paddingTop, state.paddingRight, state.paddingBottom)
+        } else {
+            val params = view.layoutParams
+            if (params != null && (params.height == 0 || params.width == 0)) {
+                if (params.height == 0) params.height = ViewGroup.LayoutParams.WRAP_CONTENT
+                if (params.width == 0) params.width = ViewGroup.LayoutParams.WRAP_CONTENT
+                view.layoutParams = params
+            }
+        }
+        view.requestLayout()
+        (view.parent as? View)?.requestLayout()
+        view.invalidate()
     }
 
     fun hidePersistently(view: View, delaysMs: LongArray = RETRY_DELAYS_MS) {

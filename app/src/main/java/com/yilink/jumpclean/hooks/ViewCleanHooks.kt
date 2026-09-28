@@ -54,90 +54,105 @@ object ViewCleanHooks {
         }
     }
 
-    private fun applyAllUIVisibility(activity: Activity) {
-        mapOf(
-            "webTab" to JumpConstants.KEY_HIDE_WEB_TAB,
-            "lotteryTab" to JumpConstants.KEY_HIDE_LOTTERY_TAB
-        ).forEach { (idName, prefKey) ->
-            if (ConfigManager.isFeatureEnabled(activity, prefKey)) {
+    fun applyAllUIVisibility(activity: Activity) {
+        try {
+            mapOf(
+                "webTab" to JumpConstants.KEY_HIDE_WEB_TAB,
+                "lotteryTab" to JumpConstants.KEY_HIDE_LOTTERY_TAB
+            ).forEach { (idName, prefKey) ->
+                val isEnabled = ConfigManager.isFeatureEnabled(activity, prefKey)
                 HookUtils.getCachedResId(activity, idName).takeIf { it != 0 }?.let { id ->
-                    activity.findViewById<View>(id)?.let { HookUtils.hidePersistently(it) }
+                    val tabView = activity.findViewById<View>(id)
+                    if (isEnabled) {
+                        tabView?.let { HookUtils.hidePersistently(it) }
+                    } else {
+                        tabView?.visibility = View.VISIBLE
+                    }
                 }
             }
-        }
-        if (ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_LOTTERY_TAB)) {
+            val lotteryHidden = ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_LOTTERY_TAB)
             HookUtils.getCachedResId(activity, "vRedDot").takeIf { it != 0 }?.let { id ->
-                activity.findViewById<View>(id)?.visibility = View.GONE
+                activity.findViewById<View>(id)?.visibility = if (lotteryHidden) View.GONE else View.VISIBLE
             }
-        }
 
-        val targets = mapOf(
-            "rvOpt" to JumpConstants.KEY_HIDE_TOPIC_LIST,
-            "ivPublishTopic" to JumpConstants.KEY_HIDE_PUBLISH_TOPIC,
-            "clPhotoWall" to JumpConstants.KEY_HIDE_PHOTO_WALL,
-            "vColorRVTop" to JumpConstants.KEY_HIDE_MEMBER_CARD,
-            "vBlackRVTop" to JumpConstants.KEY_HIDE_MEMBER_CARD,
-            "tvMyOrder" to JumpConstants.KEY_HIDE_MY_ORDER,
-            "tvMyOrderToolbar" to JumpConstants.KEY_HIDE_MY_ORDER,
-            "rvOPT" to JumpConstants.KEY_HIDE_DISCOVER_TOP_AD,
-            "adBanner" to JumpConstants.KEY_HIDE_DISCOVER_BANNER,
-            "ivTag" to JumpConstants.KEY_HIDE_WIDGET_VIP_TAG
-        )
+            val targets = mapOf(
+                "rvOpt" to JumpConstants.KEY_HIDE_TOPIC_LIST,
+                "ivPublishTopic" to JumpConstants.KEY_HIDE_PUBLISH_TOPIC,
+                "clPhotoWall" to JumpConstants.KEY_HIDE_PHOTO_WALL,
+                "vColorRVTop" to JumpConstants.KEY_HIDE_MEMBER_CARD,
+                "vBlackRVTop" to JumpConstants.KEY_HIDE_MEMBER_CARD,
+                "tvMyOrder" to JumpConstants.KEY_HIDE_MY_ORDER,
+                "tvMyOrderToolbar" to JumpConstants.KEY_HIDE_MY_ORDER,
+                "rvOPT" to JumpConstants.KEY_HIDE_DISCOVER_TOP_AD,
+                "adBanner" to JumpConstants.KEY_HIDE_DISCOVER_BANNER,
+                "ivTag" to JumpConstants.KEY_HIDE_WIDGET_VIP_TAG
+            )
 
-        val activeTargetIds = HashSet<Int>()
-        targets.forEach { (idName, prefKey) ->
-            if (ConfigManager.isFeatureEnabled(activity, prefKey)) {
-                HookUtils.getCachedResId(activity, idName).takeIf { it != 0 }?.let { activeTargetIds.add(it) }
+            val activeTargetIds = HashSet<Int>()
+            val restoreTargetIds = HashSet<Int>()
+            targets.forEach { (idName, prefKey) ->
+                HookUtils.getCachedResId(activity, idName).takeIf { it != 0 }?.let { id ->
+                    if (ConfigManager.isFeatureEnabled(activity, prefKey)) {
+                        activeTargetIds.add(id)
+                    } else {
+                        restoreTargetIds.add(id)
+                    }
+                }
             }
-        }
 
-        if (activeTargetIds.isNotEmpty()) {
             activity.window?.decorView?.let { decorView ->
-                collapseTargetViews(decorView, activeTargetIds)
+                applyTargetViewsVisibility(decorView, activeTargetIds, restoreTargetIds)
             }
-        }
 
-        // 精准消除发现页探索栏顶部的 46px (12.27dp) 顽固白缝
-        if (ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_DISCOVER_BANNER) ||
-            ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_DISCOVER_TOP_AD)
-        ) {
-            val collapsingId = HookUtils.getCachedResId(activity, "collapsing_toolbar")
-            if (collapsingId != 0) {
-                activity.findViewById<ViewGroup>(collapsingId)?.let { ctl ->
-                    for (i in 0 until ctl.childCount) {
-                        val child = ctl.getChildAt(i)
-                        if (child != null && child.javaClass.name.contains("ConstraintLayout")) {
-                            val lp = child.layoutParams
-                            if (lp is ViewGroup.MarginLayoutParams && lp.topMargin > 0) {
-                                lp.topMargin = 0
-                                child.layoutParams = lp
-                                child.requestLayout()
+            // 精准消除发现页探索栏顶部的 46px (12.27dp) 顽固白缝
+            if (ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_DISCOVER_BANNER) ||
+                ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_DISCOVER_TOP_AD)
+            ) {
+                val collapsingId = HookUtils.getCachedResId(activity, "collapsing_toolbar")
+                if (collapsingId != 0) {
+                    activity.findViewById<ViewGroup>(collapsingId)?.let { ctl ->
+                        for (i in 0 until ctl.childCount) {
+                            val child = ctl.getChildAt(i)
+                            if (child != null && child.javaClass.name.contains("ConstraintLayout")) {
+                                val lp = child.layoutParams
+                                if (lp is ViewGroup.MarginLayoutParams && lp.topMargin > 0) {
+                                    lp.topMargin = 0
+                                    child.layoutParams = lp
+                                    child.requestLayout()
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        if (ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_MEMBER_CARD)) {
+            val memberCardEnabled = ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_MEMBER_CARD)
             val buyBtnId = HookUtils.getCachedResId(activity, "tvBuy")
             if (buyBtnId != 0) {
                 activity.findViewById<View>(buyBtnId)?.let { buyBtn ->
                     (buyBtn.parent as? View)?.let { memberContainer ->
-                        HookUtils.collapseView(memberContainer)
+                        if (memberCardEnabled) {
+                            HookUtils.collapseView(memberContainer)
+                        } else {
+                            HookUtils.restoreView(memberContainer)
+                        }
                     }
                 }
             }
+        } catch (e: Exception) {
+            ConfigManager.logError("应用界面净化规则异常", e)
         }
     }
 
-    private fun collapseTargetViews(view: View, targetIds: Set<Int>) {
+    private fun applyTargetViewsVisibility(view: View, targetIds: Set<Int>, restoreIds: Set<Int>) {
         if (targetIds.contains(view.id)) {
             HookUtils.collapseView(view)
+        } else if (restoreIds.contains(view.id)) {
+            HookUtils.restoreView(view)
         }
         if (view is ViewGroup) {
             for (i in 0 until view.childCount) {
-                collapseTargetViews(view.getChildAt(i), targetIds)
+                applyTargetViewsVisibility(view.getChildAt(i), targetIds, restoreIds)
             }
         }
     }
@@ -233,8 +248,8 @@ object ViewCleanHooks {
         ConfigManager.log("✔ 游戏评价遮罩纯净单点 Hook 已就绪")
     }
 
-    private fun applyContentDetailMemberMaskHide(activity: Activity) {
-        if (!ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_CONTENT_MEMBER_MASK)) return
+    fun applyContentDetailMemberMaskHide(activity: Activity) {
+        val enabled = ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_CONTENT_MEMBER_MASK)
         try {
             val targetMaskNames = listOf(
                 "clMemberMask",
@@ -248,11 +263,17 @@ object ViewCleanHooks {
             for (idName in targetMaskNames) {
                 val resId = HookUtils.getCachedResId(activity, idName)
                 if (resId != 0) {
-                    activity.findViewById<View>(resId)?.let { HookUtils.collapseView(it) }
+                    activity.findViewById<View>(resId)?.let { view ->
+                        if (enabled) {
+                            HookUtils.collapseView(view)
+                        } else {
+                            HookUtils.restoreView(view)
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
-            ConfigManager.logError("会员遮罩隐藏失败", e)
+            ConfigManager.logError("会员遮罩处理失败", e)
         }
     }
 }

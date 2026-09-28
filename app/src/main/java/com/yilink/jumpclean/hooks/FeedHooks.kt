@@ -109,11 +109,13 @@ object FeedHooks {
                             FeatureHooks.restoreItemYearWithValidation(holder, itemView, context)
                         }
 
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_MEMBER_CARD)) {
-                            val buyBtnId = HookUtils.getCachedResId(context, "tvBuy")
-                            if (buyBtnId != 0 && itemView.findViewById<View>(buyBtnId) != null) {
+                        val buyBtnId = HookUtils.getCachedResId(context, "tvBuy")
+                        if (buyBtnId != 0 && itemView.findViewById<View>(buyBtnId) != null) {
+                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_MEMBER_CARD)) {
                                 HookUtils.collapseView(itemView)
                                 return
+                            } else {
+                                HookUtils.restoreView(itemView)
                             }
                         }
 
@@ -130,35 +132,41 @@ object FeedHooks {
                         } ?: return
 
                         if (resName.contains("general_interest_home_header")) {
-                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_BANNER)) {
-                                val bannerId = HookUtils.getCachedResId(context, "banner")
-                                if (bannerId != 0) {
-                                    itemView.findViewById<View>(bannerId)?.let { bannerView ->
+                            val bannerId = HookUtils.getCachedResId(context, "banner")
+                            if (bannerId != 0) {
+                                itemView.findViewById<View>(bannerId)?.let { bannerView ->
+                                    if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_BANNER)) {
                                         if (bannerView.visibility != View.GONE) {
                                             HookUtils.collapseView(bannerView)
                                         }
+                                    } else {
+                                        HookUtils.restoreView(bannerView)
                                     }
                                 }
                             }
                         }
 
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_HOT_DISCUSS)) {
-                            val allTopicId = HookUtils.getCachedResId(context, "flAllTopic")
-                            val indicatorId = HookUtils.getCachedResId(context, "clIndicator")
-                            val isHotDiscussItem = resName in JumpConstants.HOT_DISCUSS_LAYOUT_NAMES ||
-                                    (allTopicId != 0 && itemView.findViewById<View>(allTopicId) != null) ||
-                                    (indicatorId != 0 && itemView.findViewById<View>(indicatorId) != null)
+                        val allTopicId = HookUtils.getCachedResId(context, "flAllTopic")
+                        val indicatorId = HookUtils.getCachedResId(context, "clIndicator")
+                        val isHotDiscussItem = resName in JumpConstants.HOT_DISCUSS_LAYOUT_NAMES ||
+                                (allTopicId != 0 && itemView.findViewById<View>(allTopicId) != null) ||
+                                (indicatorId != 0 && itemView.findViewById<View>(indicatorId) != null)
 
-                            if (isHotDiscussItem) {
+                        if (isHotDiscussItem) {
+                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_HOT_DISCUSS)) {
                                 HookUtils.collapseView(itemView)
                                 return
+                            } else {
+                                HookUtils.restoreView(itemView)
                             }
                         }
 
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_POST_AD) &&
-                            resName in JumpConstants.POST_AD_LAYOUT_NAMES
-                        ) {
-                            HookUtils.collapseView(itemView)
+                        if (resName in JumpConstants.POST_AD_LAYOUT_NAMES) {
+                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_POST_AD)) {
+                                HookUtils.collapseView(itemView)
+                            } else {
+                                HookUtils.restoreView(itemView)
+                            }
                         }
                     } catch (e: Exception) {
                         ConfigManager.logError("BRV onBindViewHolder 过滤异常", e)

@@ -1,7 +1,5 @@
 package com.yilink.jumpclean.ui
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Dialog
@@ -26,6 +24,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
+import com.yilink.jumpclean.hooks.ViewCleanHooks
 
 sealed interface SettingEntry
 data class SectionHeader(val title: String) : SettingEntry
@@ -130,7 +129,6 @@ object SettingsDialog {
         val primaryTextColor = if (isDark) Color.parseColor("#F5F5F7") else Color.parseColor("#1D1D1F")
         val secondaryTextColor = if (isDark) Color.parseColor("#8E8E93") else Color.parseColor("#86868B")
         val sectionTextColor = if (isDark) Color.parseColor("#AAAAAA") else Color.parseColor("#444444")
-        val accentColor = Color.parseColor("#FF5252")
         val dividerColor = if (isDark) Color.parseColor("#2C2C2E") else Color.parseColor("#EFEFEF")
 
         val dialog = Dialog(activity, android.R.style.Theme_NoTitleBar)
@@ -196,82 +194,17 @@ object SettingsDialog {
 
         val contentLayout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(8), dp(16), dp(96))
+            setPadding(dp(16), dp(8), dp(16), dp(32))
         }
 
-        val initialMap = mutableMapOf<String, Boolean>()
-        val stateMap = mutableMapOf<String, Boolean>()
         var currentCardLayout: LinearLayout? = null
 
-        val fabButton = TextView(activity).apply {
-            text = "✓ 保存并重启"
-            textSize = 14.5f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(dp(28), dp(13), dp(28), dp(13))
-            background = GradientDrawable().apply {
-                setColor(accentColor)
-                cornerRadius = dp(24).toFloat()
-            }
-            elevation = dp(8).toFloat()
-            visibility = View.GONE
-            translationY = dp(70).toFloat()
-            alpha = 0f
-
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                bottomMargin = dp(24)
-            }
-        }
-
-        fun updateFabState() {
-            var hasChange = false
-            stateMap.forEach { (k, v) ->
-                if (initialMap[k] != v) hasChange = true
-            }
-
-            if (hasChange) {
-                if (fabButton.visibility != View.VISIBLE) {
-                    fabButton.visibility = View.VISIBLE
-                    fabButton.animate()
-                        .translationY(0f)
-                        .alpha(1f)
-                        .setDuration(220)
-                        .setListener(null)
-                        .start()
-                }
-            } else {
-                if (fabButton.visibility == View.VISIBLE) {
-                    fabButton.animate()
-                        .translationY(dp(70).toFloat())
-                        .alpha(0f)
-                        .setDuration(180)
-                        .setListener(object : AnimatorListenerAdapter() {
-                            override fun onAnimationEnd(animation: Animator) {
-                                fabButton.visibility = View.GONE
-                            }
-                        })
-                        .start()
-                }
-            }
-        }
-
-        fabButton.setOnClickListener {
-            val editor = prefs.edit()
-            stateMap.forEach { (key, value) ->
-                editor.putBoolean(key, value)
-            }
-            if (editor.commit()) {
-                dialog.dismiss()
-                restartApp(activity)
-            } else {
-                Toast.makeText(activity, "保存失败，请重试", Toast.LENGTH_SHORT).show()
-            }
-        }
+        val restartRequiredKeys = setOf(
+            JumpConstants.KEY_SKIP_SPLASH,
+            JumpConstants.KEY_HIDE_WEB_TAB,
+            JumpConstants.KEY_HIDE_LOTTERY_TAB,
+            JumpConstants.KEY_HIDE_MSG_PUSH_GUIDE
+        )
 
         items.forEach { entry ->
             when (entry) {
@@ -297,8 +230,6 @@ object SettingsDialog {
                 }
                 is SettingItem -> {
                     val isChecked = prefs.getBoolean(entry.key, ConfigManager.getDefaultFeatureValue(entry.key))
-                    initialMap[entry.key] = isChecked
-                    stateMap[entry.key] = isChecked
 
                     val rowLayout = LinearLayout(activity).apply {
                         orientation = LinearLayout.HORIZONTAL
@@ -331,8 +262,11 @@ object SettingsDialog {
                     val switchView = Switch(activity).apply {
                         this.isChecked = isChecked
                         setOnCheckedChangeListener { _, checked ->
-                            stateMap[entry.key] = checked
-                            updateFabState()
+                            prefs.edit().putBoolean(entry.key, checked).apply()
+                            ViewCleanHooks.applyAllUIVisibility(activity)
+                            if (entry.key in restartRequiredKeys) {
+                                showRestartPrompt(activity, entry.title, isDark, dp)
+                            }
                         }
                     }
 
@@ -344,8 +278,6 @@ object SettingsDialog {
                 }
                 is ConfigurableSettingItem -> {
                     val isChecked = prefs.getBoolean(entry.key, ConfigManager.getDefaultFeatureValue(entry.key))
-                    initialMap[entry.key] = isChecked
-                    stateMap[entry.key] = isChecked
 
                     val rowLayout = LinearLayout(activity).apply {
                         orientation = LinearLayout.HORIZONTAL
@@ -379,8 +311,11 @@ object SettingsDialog {
                     val switchView = Switch(activity).apply {
                         this.isChecked = isChecked
                         setOnCheckedChangeListener { _, checked ->
-                            stateMap[entry.key] = checked
-                            updateFabState()
+                            prefs.edit().putBoolean(entry.key, checked).apply()
+                            ViewCleanHooks.applyAllUIVisibility(activity)
+                            if (entry.key in restartRequiredKeys) {
+                                showRestartPrompt(activity, entry.title, isDark, dp)
+                            }
                         }
                     }
 
@@ -440,7 +375,6 @@ object SettingsDialog {
         scrollView.addView(contentLayout)
         mainLayout.addView(scrollView)
         rootFrame.addView(mainLayout)
-        rootFrame.addView(fabButton)
 
         dialog.setContentView(rootFrame)
 
@@ -483,6 +417,94 @@ object SettingsDialog {
         } catch (e: Exception) {
             ConfigManager.logError("显示设置面板失败", e)
         }
+    }
+
+    private fun showRestartPrompt(activity: Activity, titleStr: String, isDark: Boolean, dp: (Int) -> Int) {
+        val promptDialog = Dialog(activity).apply {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        }
+
+        val cardBg = if (isDark) Color.parseColor("#242426") else Color.WHITE
+        val primaryText = if (isDark) Color.parseColor("#F5F5F7") else Color.parseColor("#1C1C1E")
+        val secondaryText = if (isDark) Color.parseColor("#8E8E93") else Color.parseColor("#8A8A8E")
+        val cancelBtnBg = if (isDark) Color.parseColor("#323236") else Color.parseColor("#F0F0F2")
+        val cancelBtnText = if (isDark) Color.parseColor("#D1D1D6") else Color.parseColor("#636366")
+        val accentColor = Color.parseColor("#E60012") // 任天堂红 Nintendo Red
+
+        val card = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(cardBg)
+                cornerRadius = dp(18).toFloat()
+            }
+            setPadding(dp(22), dp(20), dp(22), dp(18))
+            layoutParams = ViewGroup.LayoutParams(dp(290), ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+
+        val titleView = TextView(activity).apply {
+            text = "重启 App 生效"
+            textSize = 17f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(primaryText)
+        }
+
+        val descView = TextView(activity).apply {
+            text = "「$titleStr」需重启 App 后生效，是否立即重启？"
+            textSize = 13.5f
+            setTextColor(secondaryText)
+            setLineSpacing(dp(3).toFloat(), 1f)
+            setPadding(0, dp(10), 0, dp(20))
+        }
+
+        val btnContainer = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+        }
+
+        val cancelBtn = TextView(activity).apply {
+            text = "稍后"
+            textSize = 13.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(cancelBtnText)
+            gravity = Gravity.CENTER
+            setPadding(dp(18), dp(9), dp(18), dp(9))
+            background = GradientDrawable().apply {
+                setColor(cancelBtnBg)
+                cornerRadius = dp(12).toFloat()
+            }
+            setOnClickListener { promptDialog.dismiss() }
+        }
+
+        val restartBtn = TextView(activity).apply {
+            text = "立即重启"
+            textSize = 13.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(18), dp(9), dp(18), dp(9))
+            background = GradientDrawable().apply {
+                setColor(accentColor)
+                cornerRadius = dp(12).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = dp(10)
+            }
+            setOnClickListener {
+                promptDialog.dismiss()
+                restartApp(activity)
+            }
+        }
+
+        btnContainer.addView(cancelBtn)
+        btnContainer.addView(restartBtn)
+
+        card.addView(titleView)
+        card.addView(descView)
+        card.addView(btnContainer)
+
+        promptDialog.setContentView(card)
+        promptDialog.show()
     }
 
     private fun restartApp(activity: Activity) {
