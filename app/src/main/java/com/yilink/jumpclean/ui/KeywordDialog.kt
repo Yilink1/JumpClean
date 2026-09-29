@@ -147,14 +147,16 @@ object KeywordDialog {
             textSize = 13f
             setTextColor(primaryText)
             setHintTextColor(Color.parseColor("#777777"))
-            minLines = 4
+            minHeight = dp(96)
+            maxHeight = dp(180)
+            isVerticalScrollBarEnabled = true
             gravity = Gravity.TOP
             setPadding(dp(12), dp(10), dp(12), dp(10))
             background = GradientDrawable().apply {
                 setColor(inputBg)
                 cornerRadius = dp(10).toFloat()
             }
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(96))
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             root.addView(this, lp)
         }
 
