@@ -328,9 +328,7 @@ object ViewCleanHooks {
                 "clMemberMask",
                 "llMemberTry",
                 "vMemberMask",
-                "vMemberChildMask",
-                "ivMemberMask",
-                "clMemberContainer"
+                "vMemberChildMask"
             )
 
             for (idName in targetMaskNames) {

@@ -303,6 +303,7 @@ object LogDialog {
             setTextColor(primaryText)
             setLineSpacing(dp(3).toFloat(), 1f)
             setTextIsSelectable(true)
+            highlightColor = Color.parseColor("#338E8E93")
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 

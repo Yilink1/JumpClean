@@ -248,10 +248,10 @@ object HookUtils {
         }
     }
 
-    fun getCachedResId(context: Context, idName: String): Int {
+    fun getCachedResId(context: Context, idName: String, warnIfNotFound: Boolean = false): Int {
         return resIdCache.getOrPut(idName) {
             val id = context.resources.getIdentifier(idName, "id", context.packageName)
-            if (id == 0) {
+            if (id == 0 && warnIfNotFound) {
                 log("⚠ 资源 ID '$idName' 未找到，布局可能已变化")
             }
             id
