@@ -3,8 +3,12 @@ package com.yilink.jumpclean
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import android.os.Handler
+import android.os.Looper
+import com.yilink.jumpclean.config.ConfigManager
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
+import java.io.File
 import java.lang.reflect.Field
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -12,11 +16,28 @@ import java.util.Locale
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 object HookUtils {
     private const val TAG = "JumpClean"
-    private const val MAX_LOG_HISTORY = 100
+    private const val MAX_LOG_HISTORY = 200
+    private const val LOG_FILE_NAME = "jumpclean_diagnostic.log"
+
+    private const val PREFS_DIAG_LOGS = "jumpclean_diag_logs"
+    private const val KEY_DIAG_CONTENT = "diag_logs_content"
+
     private val logHistory = ConcurrentLinkedDeque<String>()
+    private val isLoadedFromDisk = AtomicBoolean(false)
+
+    private val logDiskExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "JumpClean-LogDisk").apply { isDaemon = true }
+    }
+    private val flushHandler by lazy { Handler(Looper.getMainLooper()) }
+    private val flushRunnable = Runnable {
+        saveLogs(sync = false)
+    }
+
     private val resIdCache = ConcurrentHashMap<String, Int>()
     private val RETRY_DELAYS_MS = longArrayOf(500L, 1500L, 3000L)
 
@@ -28,17 +49,93 @@ object HookUtils {
         }
     }
 
-    private fun appendHistory(line: String) {
+    fun onContextReady(context: Context) {
+        loadHistoricalLogsIfNeeded(context)
+    }
+
+    private fun loadHistoricalLogsIfNeeded(context: Context? = null) {
+        if (isLoadedFromDisk.get()) return
+        val ctx = context?.applicationContext ?: ConfigManager.getValidAppContext() ?: return
+        if (!isLoadedFromDisk.compareAndSet(false, true)) return
+        try {
+            val sp = ctx.getSharedPreferences(PREFS_DIAG_LOGS, Context.MODE_PRIVATE)
+            val raw = sp.getString(KEY_DIAG_CONTENT, null)
+            val historicalLines = if (!raw.isNullOrBlank()) {
+                raw.split("\n").filter { it.isNotBlank() }
+            } else {
+                val file = File(ctx.filesDir, LOG_FILE_NAME)
+                if (file.exists()) file.readLines().filter { it.isNotBlank() } else emptyList()
+            }
+
+            if (historicalLines.isNotEmpty()) {
+                val currentMemory = logHistory.toList()
+                logHistory.clear()
+                val merged = (historicalLines + currentMemory).takeLast(MAX_LOG_HISTORY)
+                merged.forEach { logHistory.addLast(it) }
+            }
+        } catch (_: Throwable) {
+            isLoadedFromDisk.set(false)
+        }
+    }
+
+    private fun saveLogs(context: Context? = null, sync: Boolean = false) {
+        val ctx = context?.applicationContext ?: ConfigManager.getValidAppContext() ?: return
+        val content = logHistory.joinToString("\n")
+        try {
+            val sp = ctx.getSharedPreferences(PREFS_DIAG_LOGS, Context.MODE_PRIVATE)
+            if (sync) {
+                sp.edit().putString(KEY_DIAG_CONTENT, content).commit()
+            } else {
+                sp.edit().putString(KEY_DIAG_CONTENT, content).apply()
+            }
+        } catch (_: Throwable) {}
+
+        logDiskExecutor.execute {
+            try {
+                val file = File(ctx.filesDir, LOG_FILE_NAME)
+                file.parentFile?.mkdirs()
+                file.writeText(content)
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun appendHistory(line: String, immediateFlush: Boolean = false) {
+        loadHistoricalLogsIfNeeded()
         logHistory.addLast(line)
         while (logHistory.size > MAX_LOG_HISTORY) {
             logHistory.pollFirst()
         }
+        if (immediateFlush) {
+            saveLogs(sync = true)
+        } else {
+            flushHandler.removeCallbacks(flushRunnable)
+            flushHandler.postDelayed(flushRunnable, 300L)
+        }
     }
 
-    fun getRecentLogs(): List<String> = logHistory.toList()
+    fun getRecentLogs(context: Context? = null): List<String> {
+        loadHistoricalLogsIfNeeded(context)
+        return logHistory.toList()
+    }
 
-    fun clearRecentLogs() {
+    fun clearRecentLogs(context: Context? = null) {
         logHistory.clear()
+        flushHandler.removeCallbacks(flushRunnable)
+        val ctx = context?.applicationContext ?: ConfigManager.getValidAppContext()
+        if (ctx != null) {
+            try {
+                ctx.getSharedPreferences(PREFS_DIAG_LOGS, Context.MODE_PRIVATE)
+                    .edit()
+                    .clear()
+                    .commit()
+            } catch (_: Throwable) {}
+            logDiskExecutor.execute {
+                try {
+                    val file = File(ctx.filesDir, LOG_FILE_NAME)
+                    if (file.exists()) file.delete()
+                } catch (_: Throwable) {}
+            }
+        }
     }
 
     private data class ViewOriginalState(
@@ -73,7 +170,7 @@ object HookUtils {
             " (${t.javaClass.simpleName}: ${t.message})$cause"
         } else ""
         val formatted = if (time.isNotEmpty()) "[$time] [ERR] $msg$errorDetail" else "[ERR] $msg$errorDetail"
-        appendHistory(formatted)
+        appendHistory(formatted, immediateFlush = true)
         XposedBridge.log("[$TAG] [ERR] $msg")
         if (t != null) XposedBridge.log(t)
     }

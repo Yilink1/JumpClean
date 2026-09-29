@@ -55,7 +55,9 @@ object ConfigManager {
 
     fun initAppContext(context: Context) {
         if (appContextRef?.get() == null) {
-            appContextRef = WeakReference(context.applicationContext)
+            val app = context.applicationContext ?: context
+            appContextRef = WeakReference(app)
+            HookUtils.onContextReady(app)
         }
     }
 
@@ -64,7 +66,7 @@ object ConfigManager {
         return try {
             val activityThread = XposedHelpers.findClass("android.app.ActivityThread", targetClassLoader)
             (XposedHelpers.callStaticMethod(activityThread, "currentApplication") as? Context)?.also {
-                appContextRef = WeakReference(it)
+                initAppContext(it)
             }
         } catch (_: Throwable) {
             null
