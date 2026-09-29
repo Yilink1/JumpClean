@@ -11,6 +11,10 @@ class MainHook : IXposedHookLoadPackage {
 
         // 1. 宿主拦截
         if (lpparam.packageName == "com.vgjump.jump") {
+            // 仅在主进程加载界面净化与功能逻辑，跳过 :pushcore 与 :marsservice 等无 UI 子进程
+            if (lpparam.processName != "com.vgjump.jump") {
+                return
+            }
             HookUtils.log("Target loaded: ${lpparam.packageName}")
             JumpHooks.hook(lpparam)
             return

@@ -1,6 +1,7 @@
 package com.yilink.jumpclean.hooks
 
 import android.app.Activity
+import android.app.Application
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
@@ -12,12 +13,15 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Function
 
 object SplashHooks {
 
     private var processStartTime = 0L
     private var mainActivitySeen = false
+    private val voucherHooked = AtomicBoolean(false)
+    private val dialogFragmentHooked = AtomicBoolean(false)
 
     @Volatile
     var currentActivityName = ""
@@ -31,35 +35,97 @@ object SplashHooks {
         hookStartupDelayCompress(lpparam)
         hookActivityFlowProbe()
         hookFakeNotificationPermission(lpparam)
-        hookVoucherDialog(lpparam)
+        ensureVoucherDialogHooked(lpparam.classLoader)
+        hookDialogFragmentShow(lpparam.classLoader)
     }
 
-    private fun hookVoucherDialog(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun ensureVoucherDialogHooked(classLoader: ClassLoader) {
+        if (voucherHooked.get()) return
+
         val targetClassNames = listOf(
             "com.vgjump.jump.ui.main.MainViewModel",
             "com.vgjump.jump.ui.main.g"
         )
 
+        var success = false
         for (className in targetClassNames) {
-            val vmClass = XposedHelpers.findClassIfExists(className, lpparam.classLoader) ?: continue
-            var hooked = false
+            val vmClass = XposedHelpers.findClassIfExists(className, classLoader) ?: continue
+            var hookedCount = 0
+
             vmClass.declaredMethods.forEach { method ->
-                if (method.name.contains("VoucherDialog", ignoreCase = true)) {
-                    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                if (java.lang.reflect.Modifier.isAbstract(method.modifiers)) return@forEach
+                if (method.name.contains("Voucher", ignoreCase = true) ||
+                    method.name.contains("DialogData", ignoreCase = true)) {
+                    try {
+                        XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                            override fun beforeHookedMethod(param: MethodHookParam) {
+                                if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
+                                    param.result = null
+                                    ConfigManager.log("✔ [源头阻断] 拦截营销弹窗请求: ${vmClass.simpleName}.${method.name}")
+                                }
+                            }
+                        })
+                        hookedCount++
+                    } catch (e: Throwable) {
+                        ConfigManager.log("Hook ${method.name} 异常: ${e.message}")
+                    }
+                }
+            }
+
+            // 拦截协程类 MainViewModel$getVoucherDialogData$1
+            val coroutineClassName = "$className\$getVoucherDialogData\$1"
+            val coroutineClass = XposedHelpers.findClassIfExists(coroutineClassName, classLoader)
+            if (coroutineClass != null) {
+                try {
+                    XposedBridge.hookAllMethods(coroutineClass, "invokeSuspend", object : XC_MethodHook() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
-                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
-                                param.result = null
-                                ConfigManager.log("✔ [源头阻断] 拦截营销弹窗请求: ${vmClass.simpleName}.${method.name}")
+                            if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
+                                param.result = Unit
+                                ConfigManager.log("✔ [协程阻断] 拦截营销弹窗协程: $coroutineClassName")
                             }
                         }
                     })
-                    hooked = true
+                    hookedCount++
+                } catch (_: Throwable) {}
+            }
+
+            if (hookedCount > 0) {
+                success = true
+                ConfigManager.log("✔ 屏蔽营销弹窗 Hook 已就绪 ($className, $hookedCount 个挂载点)")
+            }
+        }
+
+        if (success) {
+            voucherHooked.set(true)
+        }
+    }
+
+    private fun hookDialogFragmentShow(classLoader: ClassLoader) {
+        if (dialogFragmentHooked.getAndSet(true)) return
+        try {
+            val dfClass = XposedHelpers.findClassIfExists("androidx.fragment.app.DialogFragment", classLoader) ?: return
+            val dismissHook = object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    val df = param.thisObject ?: return
+                    val className = df.javaClass.name
+                    val tag = param.args.lastOrNull() as? String ?: ""
+
+                    val isVoucher = className.contains("Voucher", ignoreCase = true) ||
+                            className.contains("discount", ignoreCase = true) ||
+                            tag.contains("voucher", ignoreCase = true) ||
+                            tag.contains("coupon", ignoreCase = true)
+
+                    if (isVoucher && ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
+                        param.result = null
+                        ConfigManager.log("✔ [展示层阻断] 拦截营销 DialogFragment: $className (tag=$tag)")
+                    }
                 }
             }
-            if (hooked) {
-                ConfigManager.log("✔ 屏蔽营销弹窗 Hook 已就绪 ($className)")
-                return
-            }
+            XposedBridge.hookAllMethods(dfClass, "show", dismissHook)
+            XposedBridge.hookAllMethods(dfClass, "showNow", dismissHook)
+            ConfigManager.log("✔ DialogFragment 营销弹窗展示层拦截就绪")
+        } catch (e: Throwable) {
+            ConfigManager.log("Hook DialogFragment.show 异常: ${e.message}")
         }
     }
 
@@ -223,6 +289,16 @@ object SplashHooks {
 
     private fun hookActivityFlowProbe() {
         try {
+            XposedBridge.hookAllMethods(Application::class.java, "onCreate", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    try {
+                        val app = param.thisObject as? Application ?: return
+                        ConfigManager.initAppContext(app)
+                        ensureVoucherDialogHooked(app.classLoader)
+                        hookDialogFragmentShow(app.classLoader)
+                    } catch (_: Throwable) {}
+                }
+            })
             XposedBridge.hookAllMethods(Activity::class.java, "onCreate", object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
@@ -231,6 +307,8 @@ object SplashHooks {
                         val name = act.javaClass.name
                         if (name.contains("MainActivity")) {
                             mainActivitySeen = true
+                            ensureVoucherDialogHooked(act.classLoader)
+                            hookDialogFragmentShow(act.classLoader)
                         } else if (name.contains("SplashActivity")) {
                             mainActivitySeen = false
                             processStartTime = SystemClock.uptimeMillis()
@@ -244,6 +322,10 @@ object SplashHooks {
                         val act = param.thisObject as? Activity ?: return
                         ConfigManager.initAppContext(act)
                         currentActivityName = act.javaClass.name
+                        if (act.javaClass.name.contains("MainActivity")) {
+                            ensureVoucherDialogHooked(act.classLoader)
+                            hookDialogFragmentShow(act.classLoader)
+                        }
                     } catch (_: Exception) {}
                 }
             })

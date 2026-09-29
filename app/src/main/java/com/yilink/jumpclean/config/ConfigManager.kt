@@ -158,9 +158,7 @@ object ConfigManager {
     }
 
     fun logError(msg: String, e: Throwable? = null) {
-        if (isFeatureEnabledSafe(targetClassLoader, JumpConstants.KEY_ENABLE_DEBUG_LOG)) {
-            HookUtils.err(msg, e)
-        }
+        HookUtils.err(msg, e)
     }
 
     fun recordOfficialPromoBlocked(adId: String, content: String) {
