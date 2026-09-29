@@ -611,7 +611,7 @@ object FeedHooks {
             }
 
             false
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             false
         }
     }

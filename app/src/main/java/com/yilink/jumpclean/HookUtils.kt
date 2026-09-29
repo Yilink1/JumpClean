@@ -127,7 +127,7 @@ object HookUtils {
     fun safeCallStringGetter(obj: Any, methodName: String): String? {
         return try {
             XposedHelpers.callMethod(obj, methodName) as? String
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
     }

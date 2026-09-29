@@ -318,6 +318,7 @@ object SettingsEntryHooks {
         var hookedBindCount = 0
         while (curClass != null && curClass != Any::class.java) {
             for (method in curClass.declaredMethods) {
+                if (java.lang.reflect.Modifier.isAbstract(method.modifiers)) continue
                 if (method.name == "onBindViewHolder" && method.parameterTypes.size >= 2) {
                     try {
                         XposedBridge.hookMethod(method, object : XC_MethodHook() {
@@ -355,6 +356,7 @@ object SettingsEntryHooks {
         curClass = adapterClass
         while (curClass != null && curClass != Any::class.java) {
             for (method in curClass.declaredMethods) {
+                if (java.lang.reflect.Modifier.isAbstract(method.modifiers)) continue
                 if (method.name == "setOnItemClickListener") {
                     try {
                         XposedBridge.hookMethod(method, object : XC_MethodHook() {
@@ -381,6 +383,7 @@ object SettingsEntryHooks {
         var cur: Class<*>? = listenerClass
         while (cur != null && cur != Any::class.java) {
             for (method in cur.declaredMethods) {
+                if (java.lang.reflect.Modifier.isAbstract(method.modifiers)) continue
                 val params = method.parameterTypes
                 if (params.size == 3 && (params[2] == Int::class.javaPrimitiveType || params[2] == java.lang.Integer::class.java)) {
                     try {
