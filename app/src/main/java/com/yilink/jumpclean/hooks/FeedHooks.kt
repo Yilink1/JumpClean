@@ -2,6 +2,7 @@ package com.yilink.jumpclean.hooks
 
 import android.app.Activity
 import android.content.Context
+import android.os.SystemClock
 import android.view.View
 import com.yilink.jumpclean.HookUtils
 import com.yilink.jumpclean.config.ConfigManager
@@ -16,6 +17,7 @@ import java.lang.reflect.Modifier
 import java.util.ArrayList
 import java.util.Collections
 import java.util.HashSet
+import java.util.concurrent.ConcurrentHashMap
 
 object FeedHooks {
 
@@ -31,9 +33,40 @@ object FeedHooks {
     private var fieldCustomNickname: Field? = null
     @Volatile
     private var fieldUserNameStr: Field? = null
+    @Volatile
+    private var fieldTitle: Field? = null
+    @Volatile
+    private var fieldContent: Field? = null
+    @Volatile
+    private var cachedModelsField: Field? = null
+
+    // 内存极速布局资源名称缓存（O(1) 替代跨 JNI 的 getResourceEntryName）
+    private val layoutNameCache = ConcurrentHashMap<Int, String>()
+
+    // onBindViewHolder 防重（防子类/父类双重 Hook 导致的每项多次执行）
+    @Volatile
+    private var lastBindHolderHash = 0
+    @Volatile
+    private var lastBindTime = 0L
+
+    // 列表清洗防重（同一次刷新触发的多次内部 setModels/addModels 仅清洗一次）
+    @Volatile
+    private var lastFilteredListHash = 0
+    @Volatile
+    private var lastFilteredListTime = 0L
 
     // 记录已经挂载 Hook 的 Adapter 类名，避免重复 Hook
     private val hookedAdapterClasses = Collections.synchronizedSet(HashSet<String>())
+
+    private fun getCachedLayoutName(context: Context, resId: Int): String {
+        return layoutNameCache.getOrPut(resId) {
+            try {
+                context.resources.getResourceEntryName(resId)
+            } catch (_: Throwable) {
+                ""
+            }
+        }
+    }
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
         // 1. 启动期尝试定位并 Hook BRV Adapter 基类（优先使用持久化缓存，零性能损耗）
@@ -282,11 +315,21 @@ object FeedHooks {
             override fun afterHookedMethod(param: MethodHookParam) {
                 try {
                     val holder = param.args.getOrNull(0) ?: return
+
+                    // 1. 同一条目在 5ms 内防重执行（解决继承链及不同重载导致单条目被 Hook 两次问题）
+                    val holderHash = System.identityHashCode(holder)
+                    val now = SystemClock.uptimeMillis()
+                    if (holderHash == lastBindHolderHash && (now - lastBindTime) < 5) {
+                        return
+                    }
+                    lastBindHolderHash = holderHash
+                    lastBindTime = now
+
                     val itemView = XposedHelpers.getObjectField(holder, "itemView") as? View ?: return
                     val context = itemView.context ?: return
                     ConfigManager.initAppContext(context)
 
-                    // 1. 发帖年份补全（可以在任何包含 tvDate 的页面执行）
+                    // 2. 发帖年份补全（可以在任何包含 tvDate 的页面执行）
                     if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_RESTORE_POST_YEAR)) {
                         FeatureHooks.restoreItemYearWithValidation(holder, itemView, context)
                     }
@@ -298,10 +341,20 @@ object FeedHooks {
                         return
                     }
 
-                    // 2. 会员卡片买会员按钮条目拦截 (tvBuy)
+                    // 快速通道：若所有 Feed 流净化开关均关闭且无折叠视图，直接快速返回，零计算损耗
+                    val isMemberCardEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_MEMBER_CARD)
+                    val isBannerEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_BANNER)
+                    val isHotDiscussEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_HOT_DISCUSS)
+                    val isPostAdEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_POST_AD)
+
+                    if (!isMemberCardEnabled && !isBannerEnabled && !isHotDiscussEnabled && !isPostAdEnabled && !HookUtils.hasCollapsedViews()) {
+                        return
+                    }
+
+                    // 3. 会员卡片买会员按钮条目拦截 (tvBuy)
                     val buyBtnId = HookUtils.getCachedResId(context, "tvBuy")
                     if (buyBtnId != 0 && itemView.findViewById<View>(buyBtnId) != null) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_MEMBER_CARD)) {
+                        if (isMemberCardEnabled) {
                             HookUtils.collapseView(itemView)
                             return
                         } else if (HookUtils.isCollapsed(itemView)) {
@@ -309,18 +362,14 @@ object FeedHooks {
                         }
                     }
 
-                    // 获取条目布局名称（可能为 null）
+                    // 4. 获取条目布局名称（走 O(1) 内存缓存，彻底杜绝高频 JNI getResourceEntryName 调用）
                     val itemViewType = try {
                         XposedHelpers.callMethod(holder, "getItemViewType") as? Int
                     } catch (_: Exception) {
                         null
                     }
-                    val resName = if (itemViewType != null) {
-                        try {
-                            context.resources.getResourceEntryName(itemViewType)
-                        } catch (_: Exception) {
-                            ""
-                        }
+                    val resName = if (itemViewType != null && itemViewType != 0) {
+                        getCachedLayoutName(context, itemViewType)
                     } else ""
 
                     // 3. 首页轮播图 (banner)
@@ -383,13 +432,27 @@ object FeedHooks {
      */
     private fun scanAndFilterAdapterModels(adapter: Any, isPromoEnabled: Boolean, isKeywordEnabled: Boolean) {
         try {
+            val cachedField = cachedModelsField
+            if (cachedField != null) {
+                val value = cachedField.get(adapter)
+                if (value is MutableList<*>) {
+                    filterPromoList(value, isPromoEnabled, isKeywordEnabled)
+                    return
+                }
+            }
+
             var cur: Class<*>? = adapter.javaClass
-            while (cur != null && cur != Any::class.java) {
-                cur.declaredFields.forEach { field ->
-                    field.isAccessible = true
-                    val value = field.get(adapter)
-                    if (value is MutableList<*>) {
-                        filterPromoList(value, isPromoEnabled, isKeywordEnabled)
+            while (cur != null && cur != Any::class.java && cur.name != "androidx.recyclerview.widget.RecyclerView\$Adapter") {
+                for (field in cur.declaredFields) {
+                    if (field.name == "models" || field.name == "_models" || field.name == "f" ||
+                        java.util.List::class.java.isAssignableFrom(field.type)) {
+                        field.isAccessible = true
+                        val value = field.get(adapter)
+                        if (value is MutableList<*>) {
+                            cachedModelsField = field
+                            filterPromoList(value, isPromoEnabled, isKeywordEnabled)
+                            return
+                        }
                     }
                 }
                 cur = cur.superclass
@@ -398,20 +461,24 @@ object FeedHooks {
     }
 
     private fun filterPromoList(list: MutableList<*>, isPromoEnabled: Boolean, isKeywordEnabled: Boolean): Boolean {
+        if (list.isEmpty()) return false
+
+        // 1. 列表实例清洗防重：同一批数据在 300ms 内避免被多个内部调用重复扫描
+        val listHash = System.identityHashCode(list)
+        val now = SystemClock.uptimeMillis()
+        if (listHash == lastFilteredListHash && (now - lastFilteredListTime) < 300) {
+            return false
+        }
+        lastFilteredListHash = listHash
+        lastFilteredListTime = now
+
         val app = ConfigManager.getValidAppContext()
         val keywordScope = app?.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
             ?.getString(JumpConstants.KEY_KEYWORD_BLOCK_SCOPE, JumpConstants.SCOPE_RECOMMEND) ?: JumpConstants.SCOPE_RECOMMEND
 
-        // 堆栈前 40 层扫描判定是否在首页推荐/社区流
-        val isFromRecommendStream = run {
-            val stack = Thread.currentThread().stackTrace
-            val limit = minOf(stack.size, 40)
-            for (i in 0 until limit) {
-                val cn = stack[i].className
-                if (cn.contains("Recommend", ignoreCase = true) || cn.contains("Community", ignoreCase = true)) return@run true
-            }
-            false
-        }
+        // 2. 零开销极速判定是否在首页流（替代原耗时极高的 Thread.currentThread().stackTrace 抓栈）
+        val actName = SplashHooks.currentActivityName
+        val isFromRecommendStream = actName.isEmpty() || actName.contains("MainActivity") || actName.contains("HomeActivity")
 
         val matchers = if (isKeywordEnabled && app != null) ConfigManager.getBlockedMatchers(app) else emptyList()
 
@@ -457,8 +524,13 @@ object FeedHooks {
                             (content.isNotEmpty() && matcher.matches(content))
                 }
             } else {
-                val titleField = HookUtils.findFieldRecursively(model.javaClass, "title")?.get(model)?.toString() ?: ""
-                val contentField = HookUtils.findFieldRecursively(model.javaClass, "content")?.get(model)?.toString() ?: ""
+                val clazz = model.javaClass
+                if (fieldTitle == null) {
+                    fieldTitle = HookUtils.findFieldRecursively(clazz, "title")
+                    fieldContent = HookUtils.findFieldRecursively(clazz, "content")
+                }
+                val titleField = fieldTitle?.get(model)?.toString() ?: ""
+                val contentField = fieldContent?.get(model)?.toString() ?: ""
                 matchers.any { matcher ->
                     (titleField.isNotEmpty() && matcher.matches(titleField)) ||
                             (contentField.isNotEmpty() && matcher.matches(contentField))
