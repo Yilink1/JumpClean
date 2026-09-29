@@ -97,7 +97,13 @@ object ConfigManager {
             JumpConstants.KEY_RESTORE_POST_YEAR,
             JumpConstants.KEY_ENABLE_DEBUG_LOG,
             JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST,
-            JumpConstants.KEY_ENABLE_KEYWORD_BLOCK -> false
+            JumpConstants.KEY_ENABLE_KEYWORD_BLOCK,
+            JumpConstants.KEY_HIDE_GAME_MEMBER_GUIDE,
+            JumpConstants.KEY_HIDE_GAME_FIND_AD,
+            JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE,
+            JumpConstants.KEY_HIDE_GAME_EXTRA_BADGE,
+            JumpConstants.KEY_HIDE_GAME_PRICE_ADS,
+            JumpConstants.KEY_HIDE_GAME_BOTTOM_TRIAL_AD -> false
 
             else -> false
         }
