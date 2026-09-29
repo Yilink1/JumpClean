@@ -24,6 +24,9 @@ object FeedHooks {
     private const val PREF_CACHED_BRV_CLASS = "cached_brv_adapter_class"
     private const val PREF_CACHED_BRV_VERSION = "cached_brv_host_version"
 
+    @Volatile
+    private var brvBaseClass: Class<*>? = null
+
     // 反射 Field 静态缓存
     @Volatile
     private var fieldAdType: Field? = null
@@ -39,6 +42,10 @@ object FeedHooks {
     private var fieldContent: Field? = null
     @Volatile
     private var cachedModelsField: Field? = null
+    @Volatile
+    private var fieldsResolved = false
+    @Volatile
+    private var keywordFieldsResolved = false
 
     // 内存极速布局资源名称缓存（O(1) 替代跨 JNI 的 getResourceEntryName）
     private val layoutNameCache = ConcurrentHashMap<Int, String>()
@@ -72,8 +79,10 @@ object FeedHooks {
         // 1. 启动期尝试定位并 Hook BRV Adapter 基类（优先使用持久化缓存，零性能损耗）
         hookBrvAdaptersAtStartup(lpparam)
 
-        // 2. 运行时动态 Hook RecyclerView.setAdapter，作为永不失效的动态兜底探针
-        hookRecyclerViewSetAdapter(lpparam)
+        // 2. 仅在启动期未命中 BRV 基类时，才开启 RecyclerView.setAdapter 动态探针兜底
+        if (brvBaseClass == null) {
+            hookRecyclerViewSetAdapter(lpparam)
+        }
     }
 
     private fun getHostVersionCode(context: Context?): Int {
@@ -198,6 +207,7 @@ object FeedHooks {
         try {
             val adapterClass = findBrvAdapterClass(lpparam.classLoader)
             if (adapterClass != null) {
+                brvBaseClass = adapterClass
                 ensureAdapterClassHooked(adapterClass, lpparam)
                 ConfigManager.log("✔ 启动期 BRV Adapter 基类 Hook 已安装: ${adapterClass.name}")
             } else {
@@ -258,6 +268,7 @@ object FeedHooks {
                         java.util.Map::class.java.isAssignableFrom(it.type)
             }
             if (hasItemTouchHelper || (cls.name.startsWith("com.drake.brv.") && hasCollections)) {
+                brvBaseClass = cls
                 saveBrvClassToCache(cls.name, 0)
             }
         } catch (_: Throwable) {}
@@ -329,11 +340,6 @@ object FeedHooks {
                     val context = itemView.context ?: return
                     ConfigManager.initAppContext(context)
 
-                    // 2. 发帖年份补全（可以在任何包含 tvDate 的页面执行）
-                    if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_RESTORE_POST_YEAR)) {
-                        FeatureHooks.restoreItemYearWithValidation(holder, itemView, context)
-                    }
-
                     // 核心边界约束：以下所有 Feed 流清理规则（轮播、热议、会员卡片、广告条目）仅在主页/推荐流中生效
                     // 严禁在帖子详情页（ContentDetailActivity 等）中执行，避免误伤帖子内部图片、话题组件和正文布局
                     val actName = (context as? Activity)?.javaClass?.name ?: SplashHooks.currentActivityName
@@ -341,11 +347,16 @@ object FeedHooks {
                         return
                     }
 
-                    // 快速通道：若所有 Feed 流净化开关均关闭且无折叠视图，直接快速返回，零计算损耗
-                    val isMemberCardEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_MEMBER_CARD)
-                    val isBannerEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_BANNER)
-                    val isHotDiscussEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_HOT_DISCUSS)
-                    val isPostAdEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_POST_AD)
+                    // 2. 发帖年份补全（基于 context 直接读取，零反射）
+                    if (ConfigManager.isFeatureEnabled(context, JumpConstants.KEY_RESTORE_POST_YEAR)) {
+                        FeatureHooks.restoreItemYearWithValidation(holder, itemView, context)
+                    }
+
+                    // 快速通道：使用 context 直读配置（零反射），若所有 Feed 流净化开关均关闭且无折叠视图，直接快速返回
+                    val isMemberCardEnabled = ConfigManager.isFeatureEnabled(context, JumpConstants.KEY_HIDE_MEMBER_CARD)
+                    val isBannerEnabled = ConfigManager.isFeatureEnabled(context, JumpConstants.KEY_HIDE_BANNER)
+                    val isHotDiscussEnabled = ConfigManager.isFeatureEnabled(context, JumpConstants.KEY_HIDE_HOT_DISCUSS)
+                    val isPostAdEnabled = ConfigManager.isFeatureEnabled(context, JumpConstants.KEY_HIDE_POST_AD)
 
                     if (!isMemberCardEnabled && !isBannerEnabled && !isHotDiscussEnabled && !isPostAdEnabled && !HookUtils.hasCollapsedViews()) {
                         return
@@ -372,7 +383,7 @@ object FeedHooks {
                         getCachedLayoutName(context, itemViewType)
                     } else ""
 
-                    // 3. 首页轮播图 (banner)
+                    // 5. 首页轮播图 (banner)
                     // 核心限制：仅在顶部 Header 布局（包含 header 或 general_interest）中折叠轮播组件，
                     // 严禁在信息流条目中盲目折叠，避免误杀好友动态、好友玩过等卡片中的游戏图片
                     val isHeaderLayout = resName.contains("header") || resName.contains("general_interest")
@@ -381,7 +392,7 @@ object FeedHooks {
                         if (bannerId != 0) {
                             val bannerView = itemView.findViewById<View>(bannerId)
                             if (bannerView != null) {
-                                if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_BANNER)) {
+                                if (isBannerEnabled) {
                                     if (bannerView.visibility != View.GONE) {
                                         HookUtils.collapseView(bannerView)
                                     }
@@ -392,7 +403,7 @@ object FeedHooks {
                         }
                     }
 
-                    // 4. Jumper 热议（仅匹配首页热议列表布局及指示器）
+                    // 6. Jumper 热议（精准匹配首页热议列表布局及指示器）
                     val allTopicId = HookUtils.getCachedResId(context, "flAllTopic")
                     val indicatorId = HookUtils.getCachedResId(context, "clIndicator")
                     val isHotDiscussItem = (resName.isNotEmpty() && (resName in JumpConstants.HOT_DISCUSS_LAYOUT_NAMES ||
@@ -401,7 +412,7 @@ object FeedHooks {
                             (indicatorId != 0 && itemView.findViewById<View>(indicatorId) != null)
 
                     if (isHotDiscussItem) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_HOT_DISCUSS)) {
+                        if (isHotDiscussEnabled) {
                             HookUtils.collapseView(itemView)
                             return
                         } else if (HookUtils.isCollapsed(itemView)) {
@@ -409,9 +420,9 @@ object FeedHooks {
                         }
                     }
 
-                    // 5. 帖子广告
+                    // 7. 帖子广告
                     if (resName.isNotEmpty() && (resName in JumpConstants.POST_AD_LAYOUT_NAMES || resName.contains("ad_sdk") || resName.contains("ad_lottery"))) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_POST_AD)) {
+                        if (isPostAdEnabled) {
                             HookUtils.collapseView(itemView)
                         } else if (HookUtils.isCollapsed(itemView)) {
                             HookUtils.restoreView(itemView)
@@ -431,6 +442,9 @@ object FeedHooks {
      * 当 Adapter 挂载时，扫描其实例字段中的 models 列表并执行一次清洗
      */
     private fun scanAndFilterAdapterModels(adapter: Any, isPromoEnabled: Boolean, isKeywordEnabled: Boolean) {
+        if (!isPromoEnabled && !isKeywordEnabled) return
+        val base = brvBaseClass
+        if (base != null && !base.isInstance(adapter)) return
         try {
             val cachedField = cachedModelsField
             if (cachedField != null) {
@@ -525,9 +539,10 @@ object FeedHooks {
                 }
             } else {
                 val clazz = model.javaClass
-                if (fieldTitle == null) {
+                if (!keywordFieldsResolved) {
                     fieldTitle = HookUtils.findFieldRecursively(clazz, "title")
                     fieldContent = HookUtils.findFieldRecursively(clazz, "content")
+                    keywordFieldsResolved = true
                 }
                 val titleField = fieldTitle?.get(model)?.toString() ?: ""
                 val contentField = fieldContent?.get(model)?.toString() ?: ""
@@ -545,11 +560,12 @@ object FeedHooks {
         return try {
             val clazz = model.javaClass
 
-            if (fieldAdType == null) {
+            if (!fieldsResolved) {
                 fieldAdType = HookUtils.findFieldRecursively(clazz, "adType")
                 fieldAdId = HookUtils.findFieldRecursively(clazz, "adId")
                 fieldCustomNickname = HookUtils.findFieldRecursively(clazz, "customNickname")
                 fieldUserNameStr = HookUtils.findFieldRecursively(clazz, "userNameStr")
+                fieldsResolved = true
             }
 
             val adType = fieldAdType?.get(model)

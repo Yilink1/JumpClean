@@ -112,12 +112,18 @@ object ConfigManager {
     }
 
     fun isFeatureEnabledSafe(classLoader: ClassLoader? = null, key: String): Boolean {
+        val app = getValidAppContext()
+        if (app != null) {
+            return isFeatureEnabled(app, key)
+        }
+
         val cl = classLoader ?: targetClassLoader ?: ConfigManager::class.java.classLoader
 
         try {
             val activityThread = XposedHelpers.findClass("android.app.ActivityThread", cl)
             val currentApp = XposedHelpers.callStaticMethod(activityThread, "currentApplication") as? Context
             if (currentApp != null) {
+                initAppContext(currentApp)
                 return isFeatureEnabled(currentApp, key)
             }
         } catch (_: Exception) {}
