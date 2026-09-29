@@ -9,6 +9,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.io.File
 import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 sealed interface KeywordMatcher {
     fun matches(text: String): Boolean
@@ -151,6 +152,8 @@ object ConfigManager {
         }
     }
 
+    private val lastErrorToastTime = AtomicLong(0L)
+
     fun log(msg: String) {
         if (isFeatureEnabledSafe(targetClassLoader, JumpConstants.KEY_ENABLE_DEBUG_LOG)) {
             HookUtils.log(msg)
@@ -159,6 +162,25 @@ object ConfigManager {
 
     fun logError(msg: String, e: Throwable? = null) {
         HookUtils.err(msg, e)
+
+        // 仅在开启调试日志时，向开发者提供 Toast 异常提醒（3秒防抖防刷屏）
+        if (isFeatureEnabledSafe(targetClassLoader, JumpConstants.KEY_ENABLE_DEBUG_LOG)) {
+            val now = System.currentTimeMillis()
+            if (now - lastErrorToastTime.get() > 3000L) {
+                lastErrorToastTime.set(now)
+                getValidAppContext()?.let { ctx ->
+                    debounceHandler.post {
+                        try {
+                            android.widget.Toast.makeText(
+                                ctx,
+                                "[JumpClean] 发现 Hook 异常: $msg",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        } catch (_: Throwable) {}
+                    }
+                }
+            }
+        }
     }
 
     fun recordOfficialPromoBlocked(adId: String, content: String) {

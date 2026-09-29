@@ -92,6 +92,9 @@ object SettingsDialog {
 
             SectionHeader("个性化与拓展"),
             SettingItem(JumpConstants.KEY_ENABLE_DEBUG_LOG, "开启调试日志"),
+            ActionItem("查看诊断日志", desc = "查看与一键复制近期运行日志") {
+                LogDialog.show(activity)
+            },
             ActionItem("更换 App 图标", desc = "修复官方遗漏图标，含 21 款") {
                 IconPickerDialog.show(activity)
             },

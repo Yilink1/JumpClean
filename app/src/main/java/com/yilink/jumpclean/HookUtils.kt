@@ -6,13 +6,40 @@ import android.view.ViewGroup
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import java.lang.reflect.Field
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedDeque
 
 object HookUtils {
     private const val TAG = "JumpClean"
+    private const val MAX_LOG_HISTORY = 100
+    private val logHistory = ConcurrentLinkedDeque<String>()
     private val resIdCache = ConcurrentHashMap<String, Int>()
     private val RETRY_DELAYS_MS = longArrayOf(500L, 1500L, 3000L)
+
+    private fun getCurrentTimeString(): String {
+        return try {
+            SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        } catch (_: Throwable) {
+            ""
+        }
+    }
+
+    private fun appendHistory(line: String) {
+        logHistory.addLast(line)
+        while (logHistory.size > MAX_LOG_HISTORY) {
+            logHistory.pollFirst()
+        }
+    }
+
+    fun getRecentLogs(): List<String> = logHistory.toList()
+
+    fun clearRecentLogs() {
+        logHistory.clear()
+    }
 
     private data class ViewOriginalState(
         val width: Int,
@@ -33,10 +60,20 @@ object HookUtils {
     fun hasCollapsedViews(): Boolean = collapsedViewStates.isNotEmpty()
 
     fun log(msg: String) {
+        val time = getCurrentTimeString()
+        val formatted = if (time.isNotEmpty()) "[$time] $msg" else msg
+        appendHistory(formatted)
         XposedBridge.log("[$TAG] $msg")
     }
 
     fun err(msg: String, t: Throwable? = null) {
+        val time = getCurrentTimeString()
+        val errorDetail = if (t != null) {
+            val cause = t.cause?.let { " (Caused by ${it.javaClass.simpleName}: ${it.message})" } ?: ""
+            " (${t.javaClass.simpleName}: ${t.message})$cause"
+        } else ""
+        val formatted = if (time.isNotEmpty()) "[$time] [ERR] $msg$errorDetail" else "[ERR] $msg$errorDetail"
+        appendHistory(formatted)
         XposedBridge.log("[$TAG] [ERR] $msg")
         if (t != null) XposedBridge.log(t)
     }
