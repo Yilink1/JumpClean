@@ -2,7 +2,13 @@ package com.yilink.jumpclean.hooks
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.Color
+import android.os.SystemClock
+import android.text.Spanned
+import android.text.style.ClickableSpan
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.widget.TextView
 import com.yilink.jumpclean.HookUtils
 import com.yilink.jumpclean.config.ConfigManager
@@ -13,6 +19,8 @@ import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.util.Collections
 import java.util.LinkedHashMap
+import java.util.WeakHashMap
+import kotlin.math.abs
 
 object FeatureHooks {
 
@@ -384,36 +392,98 @@ object FeatureHooks {
         }
     }
 
+    private val configuredCopyViews = WeakHashMap<TextView, Boolean>()
+
+    /**
+     * 智能文本分流器：
+     * 完美兼顾「自由长按划选复制」与「话题/链接标签点击跳转」。
+     * 当用户轻触点击时优先派发 ClickableSpan，长按/拖动时光标正常选词并触发复制菜单。
+     */
+    private class SelectableLinkTouchListener : View.OnTouchListener {
+        private var downX = 0f
+        private var downY = 0f
+        private var downTime = 0L
+
+        override fun onTouch(v: View, event: MotionEvent): Boolean {
+            val tv = v as? TextView ?: return false
+            val text = tv.text as? Spanned ?: return false
+
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    downY = event.y
+                    downTime = SystemClock.uptimeMillis()
+                }
+                MotionEvent.ACTION_UP -> {
+                    val upX = event.x
+                    val upY = event.y
+                    val upTime = SystemClock.uptimeMillis()
+                    val dx = abs(upX - downX)
+                    val dy = abs(upY - downY)
+                    val duration = upTime - downTime
+                    val touchSlop = ViewConfiguration.get(tv.context).scaledTouchSlop
+                    val longPressTimeout = ViewConfiguration.getLongPressTimeout()
+
+                    // 若为短按轻点（非滑动滚屏、非长按选词），优先判定是否命中 ClickableSpan（话题标签或超链接）
+                    if (dx <= touchSlop && dy <= touchSlop && duration < longPressTimeout) {
+                        val x = upX.toInt() - tv.totalPaddingLeft + tv.scrollX
+                        val y = upY.toInt() - tv.totalPaddingTop + tv.scrollY
+
+                        val layout = tv.layout
+                        if (layout != null) {
+                            val line = layout.getLineForVertical(y)
+                            val off = layout.getOffsetForHorizontal(line, x.toFloat())
+
+                            if (x >= layout.getLineLeft(line) && x <= layout.getLineRight(line)) {
+                                val spans = text.getSpans(off, off, ClickableSpan::class.java)
+                                if (!spans.isNullOrEmpty()) {
+                                    try {
+                                        spans[0].onClick(tv)
+                                        return true
+                                    } catch (_: Throwable) {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return false
+        }
+    }
+
+    private val selectableLinkTouchListener = SelectableLinkTouchListener()
+
     private fun isTargetTextView(tv: TextView?): Boolean {
         if (tv == null) return false
-        val text = tv.text?.toString()?.trim() ?: return false
-        if (text.length < 10) return false
         val act = SplashHooks.currentActivityName
+        // 关键性能短路：非详情页（如 MainActivity 首页等）直接阻断，0 反射、0 内存损耗
+        if (!act.contains("Detail")) return false
+
         val cls = tv.javaClass.name
-        if (act.contains("GameDetailActivity")) {
-            return cls.contains("MyExpandableTextView") && text.length >= 10
-        }
-        if (act.contains("ContentDetailActivity") || act.contains("CommentDetailActivity")) {
-            return cls.contains("LineHeightTextView") || cls.contains("MyExpandableTextView")
-        }
-        return false
+        val isTargetClass = cls.contains("LineHeightTextView") || cls.contains("MyExpandableTextView")
+        if (!isTargetClass) return false
+
+        val text = tv.text
+        return text != null && text.length >= 10
     }
 
     private fun enableTextCopy(tv: TextView?, classLoader: ClassLoader) {
-        if (!ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_ENABLE_COPY) || tv == null) return
+        if (tv == null) return
+        if (configuredCopyViews.containsKey(tv)) return
+        if (!ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_ENABLE_COPY)) return
+
         try {
             if (isTargetTextView(tv)) {
-                if (tv.isTextSelectable && tv.isLongClickable) return
+                configuredCopyViews[tv] = true
                 tv.setTextIsSelectable(true)
                 tv.isLongClickable = true
                 tv.isFocusable = true
                 tv.isFocusableInTouchMode = true
                 tv.customSelectionActionModeCallback = null
-            } else {
-                if (tv.isTextSelectable) {
-                    tv.setTextIsSelectable(false)
-                    tv.isLongClickable = false
-                }
+                // 恢复 Jump 标志性半透明红高光选区 (#33FF5252)
+                tv.highlightColor = Color.parseColor("#33FF5252")
+                // 挂载防拦截触摸监听器，保障话题标签点击可用
+                tv.setOnTouchListener(selectableLinkTouchListener)
             }
         } catch (e: Exception) {
             ConfigManager.logError("TextView 文本选择设置失败", e)
@@ -422,21 +492,21 @@ object FeatureHooks {
 
     private fun hookNativeTextCopy(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
+            // 剥离全局 View.onAttachedToWindow Hook，彻底消除首页与全局滑动的微卡掉帧
             XposedHelpers.findAndHookMethod(
                 TextView::class.java, "setText",
                 CharSequence::class.java, TextView.BufferType::class.java,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
+                        // 首页或非详情页纳秒级极速返回
+                        val act = SplashHooks.currentActivityName
+                        if (!act.contains("Detail")) return
+
                         enableTextCopy(param.thisObject as? TextView, lpparam.classLoader)
                     }
                 }
             )
-            XposedHelpers.findAndHookMethod(View::class.java, "onAttachedToWindow", object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    enableTextCopy(param.thisObject as? TextView, lpparam.classLoader)
-                }
-            })
-            ConfigManager.log("✔ 原生 TextView 复制解锁 Hook 已安装")
+            ConfigManager.log("✔ 原生 TextView 复制解锁已优化 (已剥离全局 View Hook，接入话题点击保护)")
         } catch (e: Exception) {
             ConfigManager.logError("✘ 原生 TextView 复制解锁 Hook 失败", e)
         }
