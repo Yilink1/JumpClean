@@ -59,6 +59,9 @@ object FeedHooks {
     // 记录已经挂载 Hook 的 Adapter 类名，避免重复 Hook
     private val hookedAdapterClasses = Collections.synchronizedSet(HashSet<String>())
 
+    @Volatile
+    private var lastAdCollapseLogTime = 0L
+
     private fun getCachedLayoutName(context: Context, resId: Int): String {
         return layoutNameCache.getOrPut(resId) {
             try {
@@ -443,6 +446,11 @@ object FeedHooks {
                     if (resName.isNotEmpty() && (resName in JumpConstants.POST_AD_LAYOUT_NAMES || resName.contains("ad_sdk") || resName.contains("ad_lottery"))) {
                         if (isPostAdEnabled) {
                             HookUtils.collapseView(itemView)
+                            val nowTime = SystemClock.uptimeMillis()
+                            if (nowTime - lastAdCollapseLogTime > 1000L) {
+                                lastAdCollapseLogTime = nowTime
+                                ConfigManager.log("🛡 [UI层折叠] 拦截推荐流/帖子商业广告 ($resName)")
+                            }
                         } else if (HookUtils.isCollapsed(itemView)) {
                             HookUtils.restoreView(itemView)
                         }

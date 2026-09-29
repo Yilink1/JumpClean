@@ -238,48 +238,65 @@ object ViewCleanHooks {
     private fun hookAdViews(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             val nativeAdClass = XposedHelpers.findClassIfExists("com.qq.e.ads.nativ.widget.NativeAdContainer", lpparam.classLoader) ?: return
+            val expressAdClass = XposedHelpers.findClassIfExists("com.qq.e.ads.nativ.NativeExpressADView", lpparam.classLoader)
 
+            var lastNativeAdLogTime = 0L
             val collapseAdAction: (View) -> Unit = { view ->
                 if (ConfigManager.isFeatureEnabled(view.context, JumpConstants.KEY_HIDE_POST_AD)) {
                     HookUtils.collapseView(view)
+                    val now = SystemClock.uptimeMillis()
+                    if (now - lastNativeAdLogTime > 1500L) {
+                        lastNativeAdLogTime = now
+                        ConfigManager.log("🛡 [广告容器拦截] 折叠腾讯 NativeAdContainer 广告 (推荐流/帖子内嵌)")
+                    }
+                } else if (HookUtils.isCollapsed(view)) {
+                    HookUtils.restoreView(view)
                 }
             }
 
-            XposedBridge.hookAllConstructors(nativeAdClass, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    try {
-                        val view = param.thisObject as? View ?: return
-                        collapseAdAction(view)
-                    } catch (e: Exception) {
-                        ConfigManager.logError("NativeAdContainer 构造拦截异常", e)
+            val hookAdClass = { targetCls: Class<*> ->
+                XposedBridge.hookAllConstructors(targetCls, object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        try {
+                            val view = param.thisObject as? View ?: return
+                            collapseAdAction(view)
+                        } catch (e: Exception) {
+                            ConfigManager.logError("${targetCls.simpleName} 构造拦截异常", e)
+                        }
                     }
-                }
-            })
+                })
+
+                XposedBridge.hookAllMethods(targetCls, "setVisibility", object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        try {
+                            val view = param.thisObject as? View ?: return
+                            if (ConfigManager.isFeatureEnabled(view.context, JumpConstants.KEY_HIDE_POST_AD)) {
+                                param.args[0] = View.GONE
+                                collapseAdAction(view)
+                            }
+                        } catch (e: Exception) {
+                            ConfigManager.logError("${targetCls.simpleName} setVisibility 拦截异常", e)
+                        }
+                    }
+                })
+            }
+
+            hookAdClass(nativeAdClass)
+            if (expressAdClass != null) {
+                hookAdClass(expressAdClass)
+            }
 
             XposedHelpers.findAndHookMethod(View::class.java, "onAttachedToWindow", object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val view = param.thisObject as? View ?: return
-                        if (nativeAdClass.isInstance(view)) {
+                        if (nativeAdClass.isInstance(view) || (expressAdClass != null && expressAdClass.isInstance(view))) {
                             collapseAdAction(view)
                         }
                     } catch (_: Exception) {}
                 }
             })
 
-            XposedBridge.hookAllMethods(nativeAdClass, "setVisibility", object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    try {
-                        val view = param.thisObject as? View ?: return
-                        if (ConfigManager.isFeatureEnabled(view.context, JumpConstants.KEY_HIDE_POST_AD)) {
-                            param.args[0] = View.GONE
-                            collapseAdAction(view)
-                        }
-                    } catch (e: Exception) {
-                        ConfigManager.logError("NativeAdContainer setVisibility 拦截异常", e)
-                    }
-                }
-            })
             ConfigManager.log("✔ 通用广告容器（首页推荐流 + 帖子内嵌）Hook 已安装")
         } catch (e: Exception) {
             ConfigManager.logError("✘ 通用广告容器 Hook 失败", e)
@@ -650,11 +667,13 @@ object ViewCleanHooks {
                     if (urlStr.contains("/jmall/order/recently")) {
                         if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE)) {
                             try {
-                                return@newProxyInstance createMockJsonResponse(
+                                val resp = createMockJsonResponse(
                                     lpparam.classLoader,
                                     request,
                                     """{"success":true,"code":200,"msg":"成功","data":[]}"""
                                 )
+                                ConfigManager.log("⚡ [网络层阻断] 拦截动态购买弹幕 (/jmall/order/recently)")
+                                return@newProxyInstance resp
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 伪造 /jmall/order/recently 响应失败，回退原生请求", e)
                             }
@@ -666,7 +685,9 @@ object ViewCleanHooks {
                         if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_PRICE_ADS)) {
                             val originalResponse = proceedSafe(proceedMethod, chain, request)
                             try {
-                                return@newProxyInstance cleanPriceResponse(lpparam.classLoader, originalResponse)
+                                val cleaned = cleanPriceResponse(lpparam.classLoader, originalResponse)
+                                ConfigManager.log("⚡ [网络层清洗] 过滤低价榜推广项与导购链接 (/jump/price/getAllPriceByGame)")
+                                return@newProxyInstance cleaned
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 清洗 /jump/price/getAllPriceByGame 异常", e)
                                 return@newProxyInstance originalResponse
@@ -679,7 +700,9 @@ object ViewCleanHooks {
                         if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_BOTTOM_TRIAL_AD)) {
                             val originalResponse = proceedSafe(proceedMethod, chain, request)
                             try {
-                                return@newProxyInstance cleanGameExtResponse(lpparam.classLoader, originalResponse)
+                                val cleaned = cleanGameExtResponse(lpparam.classLoader, originalResponse)
+                                ConfigManager.log("⚡ [网络层清洗] 剔除底栏购前体验与充值横幅 (/jump/game/ext)")
+                                return@newProxyInstance cleaned
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 清洗 /jump/game/ext 异常", e)
                                 return@newProxyInstance originalResponse
@@ -693,14 +716,67 @@ object ViewCleanHooks {
                             // 仅在详情页背景静默请求 (from=1 或当前在 GameDetailActivity) 时阻断，不影响商城正向浏览
                             if (urlStr.contains("from=1") || SplashHooks.currentActivityName.contains("GameDetail")) {
                                 try {
-                                    return@newProxyInstance createMockJsonResponse(
+                                    val resp = createMockJsonResponse(
                                         lpparam.classLoader,
                                         request,
                                         """{"success":false,"code":404,"msg":"Ad blocked","data":null}"""
                                     )
+                                    ConfigManager.log("⚡ [网络层阻断] 拦截促销点卡卡券横幅 (/jmall/product/detail)")
+                                    return@newProxyInstance resp
                                 } catch (e: Throwable) {
                                     ConfigManager.logError("✘ 伪造 /jmall/product/detail 响应失败，回退原生请求", e)
                                 }
+                            }
+                        }
+                    }
+
+                    // 5. 推荐流与帖子第三方商业广告网络断电：腾讯优量汇 / 广点通 SDK (gdt.qq.com)
+                    if (urlStr.contains("gdt.qq.com") || urlStr.contains("gdt_mview")) {
+                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_POST_AD)) {
+                            try {
+                                val resp = createMockJsonResponse(
+                                    lpparam.classLoader,
+                                    request,
+                                    """{"ret":-1,"msg":"No ad"}"""
+                                )
+                                ConfigManager.log("⚡ [网络层阻断] 拦截腾讯优量汇商业广告 SDK (gdt.qq.com)")
+                                return@newProxyInstance resp
+                            } catch (e: Throwable) {
+                                ConfigManager.logError("✘ 伪造 gdt.qq.com 广告响应失败", e)
+                            }
+                        }
+                    }
+
+                    // 6. 首页顶部枢纽数据清洗：/jump/interest_v2/home (按需清空轮播广告 bannerList 和顶部话题栏 promotionList)
+                    if (urlStr.contains("/jump/interest_v2/home")) {
+                        val hideBanner = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_BANNER)
+                        val hideTopicList = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_TOPIC_LIST)
+                        if (hideBanner || hideTopicList) {
+                            val originalResponse = proceedSafe(proceedMethod, chain, request)
+                            try {
+                                val cleaned = cleanHomeInterestResponse(lpparam.classLoader, originalResponse, hideBanner, hideTopicList)
+                                ConfigManager.log("⚡ [网络层清洗] 首页顶部数据 (轮播=$hideBanner, 话题=$hideTopicList)")
+                                return@newProxyInstance cleaned
+                            } catch (e: Throwable) {
+                                ConfigManager.logError("✘ 清洗 /jump/interest_v2/home 异常", e)
+                                return@newProxyInstance originalResponse
+                            }
+                        }
+                    }
+
+                    // 7. Jumper 热议广场网络断电：/jump/subject/squareList 直接返回空数据
+                    if (urlStr.contains("/jump/subject/squareList")) {
+                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_HOT_DISCUSS)) {
+                            try {
+                                val resp = createMockJsonResponse(
+                                    lpparam.classLoader,
+                                    request,
+                                    """{"success":true,"code":0,"msg":"success","data":[]}"""
+                                )
+                                ConfigManager.log("⚡ [网络层阻断] 拦截 Jumper 热议广场 (/jump/subject/squareList)")
+                                return@newProxyInstance resp
+                            } catch (e: Throwable) {
+                                ConfigManager.logError("✘ 伪造 /jump/subject/squareList 响应失败，回退原生请求", e)
                             }
                         }
                     }
@@ -816,6 +892,34 @@ object ViewCleanHooks {
             data.remove("preSale")
             data.remove("priceBanner")
             data.put("gameDetailADs", org.json.JSONArray())
+            return root.toString()
+        } catch (_: Throwable) {
+            return jsonStr
+        }
+    }
+
+    private fun cleanHomeInterestResponse(classLoader: ClassLoader, response: Any, hideBanner: Boolean, hideTopicList: Boolean): Any {
+        val body = XposedHelpers.callMethod(response, "body") ?: return response
+        val bodyString = XposedHelpers.callMethod(body, "string") as? String ?: return response
+
+        val cleanJson = cleanHomeInterestJson(bodyString, hideBanner, hideTopicList)
+        val mediaType = XposedHelpers.callMethod(body, "contentType")
+        val newBody = createResponseBody(classLoader, mediaType, cleanJson)
+        val newBuilder = XposedHelpers.callMethod(response, "newBuilder")
+        XposedHelpers.callMethod(newBuilder, "body", newBody)
+        return XposedHelpers.callMethod(newBuilder, "build")
+    }
+
+    private fun cleanHomeInterestJson(jsonStr: String, hideBanner: Boolean, hideTopicList: Boolean): String {
+        try {
+            val root = org.json.JSONObject(jsonStr)
+            val data = root.optJSONObject("data") ?: return jsonStr
+            if (hideBanner) {
+                data.put("bannerList", org.json.JSONArray())
+            }
+            if (hideTopicList) {
+                data.put("promotionList", org.json.JSONArray())
+            }
             return root.toString()
         } catch (_: Throwable) {
             return jsonStr
