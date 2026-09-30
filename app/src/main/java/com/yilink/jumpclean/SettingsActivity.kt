@@ -62,51 +62,106 @@ class SettingsActivity : Activity() {
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), statusBarHeight + dp(18), dp(20), dp(40))
+            setPadding(dp(20), statusBarHeight + dp(22), dp(20), dp(40))
         }
 
-        // 1. 标题
-        val title = TextView(this).apply {
-            text = "JumpClean"
-            textSize = 28f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(primaryText)
-            setPadding(dp(4), 0, 0, dp(18))
+        // 1. 获取自身 APK 的真实版本号与构建类型
+        val appVersionName = try {
+            val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0)
+            }
+            pkgInfo.versionName ?: "1.0.0"
+        } catch (_: Exception) {
+            "1.0.0"
         }
-        container.addView(title)
 
-        // 2. 激活状态大卡片
+        val isDebugBuild = packageName.endsWith(".debug") ||
+                ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0)
+        val buildType = if (isDebugBuild) "Debug" else "Release"
+
+        // 顶栏 Header（大标题 + 精致细腻版本胶囊）
+        val headerLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), 0, 0, dp(28))
+
+            addView(TextView(context).apply {
+                text = "JumpClean"
+                textSize = 28f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(primaryText)
+                includeFontPadding = false
+            })
+
+            val badgeBg = if (isDark) Color.parseColor("#222224") else Color.parseColor("#ECEEF2")
+            val badgeTextColor = if (isDark) Color.parseColor("#8E8E93") else Color.parseColor("#7C7C80")
+            addView(TextView(context).apply {
+                text = "v$appVersionName ($buildType)"
+                textSize = 11f
+                setTextColor(badgeTextColor)
+                includeFontPadding = false
+                setPadding(dp(7), dp(3), dp(7), dp(3))
+                background = GradientDrawable().apply {
+                    setColor(badgeBg)
+                    cornerRadius = dp(6).toFloat()
+                }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    marginStart = dp(10)
+                    topMargin = dp(2)
+                }
+            })
+        }
+        container.addView(headerLayout)
+
+        // 2. 激活状态大卡片（微渐变背景 + 呼吸光环对勾）
         val isActive = isActivated()
-        val activeThemeColor = if (isActive) Color.parseColor("#00B06F") else Color.parseColor("#FF6B6B")
+        val activeThemeStart = if (isActive) Color.parseColor("#00B875") else Color.parseColor("#FF5C5C")
+        val activeThemeEnd = if (isActive) Color.parseColor("#009E60") else Color.parseColor("#E04848")
 
         val activeCard = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(20), dp(18), dp(20), dp(18))
-            background = GradientDrawable().apply {
-                setColor(activeThemeColor)
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(activeThemeStart, activeThemeEnd)
+            ).apply {
                 cornerRadius = dp(16).toFloat()
             }
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(14)
+                bottomMargin = dp(16)
+            }
+        }
+
+        // 光环容器
+        val iconRing = android.widget.FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#25FFFFFF"))
+                shape = GradientDrawable.OVAL
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply {
+                marginEnd = dp(14)
             }
         }
 
         val checkIcon = TextView(this).apply {
             text = if (isActive) "✓" else "!"
-            textSize = 17f
+            textSize = 16f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(activeThemeColor)
+            setTextColor(activeThemeStart)
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
                 shape = GradientDrawable.OVAL
-                setSize(dp(28), dp(28))
             }
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28)).apply {
-                marginEnd = dp(14)
+            layoutParams = android.widget.FrameLayout.LayoutParams(dp(26), dp(26)).apply {
+                gravity = Gravity.CENTER
             }
         }
+        iconRing.addView(checkIcon)
 
         val activeTextGroup = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -123,27 +178,53 @@ class SettingsActivity : Activity() {
                 setPadding(0, dp(2), 0, 0)
             })
         }
-        activeCard.addView(checkIcon)
+        activeCard.addView(iconRing)
         activeCard.addView(activeTextGroup)
         container.addView(activeCard)
 
-        // 通用卡片构建
-        fun createCard(titleStr: String, descStr: String, actionText: String? = null, onClick: (() -> Unit)? = null): LinearLayout {
-            return LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(18), dp(16), dp(18), dp(16))
+        // 通用卡片构建（支持右侧水印图标）
+        fun createCard(
+            titleStr: String,
+            descStr: String,
+            actionText: String? = null,
+            watermarkRes: Int? = null,
+            onClick: (() -> Unit)? = null
+        ): View {
+            val frame = android.widget.FrameLayout(this).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(16)
+                }
                 background = GradientDrawable().apply {
                     setColor(cardBgColor)
                     cornerRadius = dp(16).toFloat()
-                }
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = dp(12)
                 }
                 if (onClick != null) {
                     isClickable = true
                     isFocusable = true
                     setOnClickListener { onClick() }
                 }
+            }
+
+            // 右侧水印图标
+            if (watermarkRes != null) {
+                val watermark = android.widget.ImageView(this).apply {
+                    setImageResource(watermarkRes)
+                    val iconColor = if (isDark) Color.WHITE else Color.BLACK
+                    setColorFilter(iconColor)
+                    alpha = if (isDark) 0.08f else 0.05f
+                    layoutParams = android.widget.FrameLayout.LayoutParams(dp(86), dp(86)).apply {
+                        gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                        marginEnd = dp(14)
+                    }
+                }
+                frame.addView(watermark)
+            }
+
+            // 内容布局
+            val contentLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(20), dp(18), dp(20), dp(18))
+                layoutParams = android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
                 addView(TextView(context).apply {
                     text = titleStr
@@ -156,8 +237,8 @@ class SettingsActivity : Activity() {
                     text = descStr
                     textSize = 12.5f
                     setTextColor(secondaryText)
-                    setPadding(0, dp(4), 0, 0)
-                    setLineSpacing(dp(2).toFloat(), 1f)
+                    setPadding(0, dp(6), 0, 0)
+                    setLineSpacing(dp(3).toFloat(), 1f)
                 })
 
                 if (actionText != null) {
@@ -166,35 +247,20 @@ class SettingsActivity : Activity() {
                         textSize = 13f
                         setTypeface(null, Typeface.BOLD)
                         setTextColor(Color.parseColor("#007AFF"))
-                        setPadding(0, dp(10), 0, 0)
+                        setPadding(0, dp(12), 0, 0)
                     })
                 }
             }
+            frame.addView(contentLayout)
+
+            return frame
         }
 
-        // 3. 动态获取自身 APK 的真实版本号
-        val appVersionName = try {
-            val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                packageManager.getPackageInfo(packageName, 0)
-            }
-            pkgInfo.versionName ?: "1.0.0"
-        } catch (_: Exception) {
-            "1.0.0"
-        }
-
+        // 3. 模块设置指引卡片
         container.addView(createCard(
-            "模块版本",
-            "v$appVersionName (Release)\n还原纯粹的社区体验"
-        ))
-
-        // 4. 模块设置指引卡片
-        container.addView(createCard(
-            "模块设置",
-            "设置面板已深度集成在宿主中\n请在客户端首页长按底栏「我的」Tab 开启",
-            "打开客户端 ›"
+            titleStr = "模块设置",
+            descStr = "支持通过以下两种方式呼出设置面板：\n① 官方设置：Jump「我的」页面 -> 点击「设置」\n② 快捷手势：长按底栏「我的」图标即可呼出",
+            actionText = "打开客户端 ›"
         ) {
             var launched = false
             try {
@@ -221,11 +287,12 @@ class SettingsActivity : Activity() {
             }
         })
 
-        // 5. GitHub 仓库跳转卡片
+        // 4. GitHub 仓库跳转卡片（带右侧精致半透明水印）
         container.addView(createCard(
-            "GitHub",
-            "开源主页与更新日志",
-            "查看源码仓库 ↗"
+            titleStr = "GitHub",
+            descStr = "开源仓库 · 问题反馈 · 源码日志",
+            actionText = "前往开源仓库 ↗",
+            watermarkRes = R.drawable.ic_github
         ) {
             try {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Yilink1/JumpClean"))

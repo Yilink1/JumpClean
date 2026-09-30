@@ -78,7 +78,7 @@ object SettingsDialog {
             SettingItem(JumpConstants.KEY_HIDE_VOUCHER_POPUP, "屏蔽营销弹窗"),
             SettingItem(JumpConstants.KEY_HIDE_MSG_PUSH_GUIDE, "屏蔽通知开启引导"),
 
-            SectionHeader("首页浏览"),
+            SectionHeader("首页"),
             SettingItem(JumpConstants.KEY_HIDE_TOPIC_LIST, "隐藏顶部话题栏"),
             SettingItem(JumpConstants.KEY_HIDE_BANNER, "屏蔽首页轮播广告"),
             SettingItem(JumpConstants.KEY_HIDE_HOT_DISCUSS, "隐藏「Jumper热议」卡片"),
@@ -277,11 +277,11 @@ object SettingsDialog {
 
         val getEvaluationDesc = { count: Int ->
             when {
-                count < 10 -> "评价等级：学徒。刚领到打工装备，正在熟悉小酱的出现规律。"
-                count < 50 -> "评价等级：半熟。渐入佳境，已经能熟练地把小酱拖进回收篓。"
-                count < 200 -> "评价等级：独当一面。手法纯熟，多余的小酱贴全部拖走啦。"
-                count < 500 -> "评价等级：熟练。稳定产出，熊先生商会发出了满意的呼噜声。"
-                count < 1000 -> "评价等级：达人。金牌员工，任何伪装推广都逃不过你的准星。"
+                count < 10 -> "评价等级：学徒。刚领到打工装备，正在熟悉小酱的出现规律"
+                count < 50 -> "评价等级：半熟。渐入佳境，配额收集稳步推进中，干得不错"
+                count < 200 -> "评价等级：独当一面。业务娴熟，多余的小酱推广均被精准回收"
+                count < 500 -> "评价等级：熟练。高效运作，配额交付十分稳定，值得信赖"
+                count < 1000 -> "评价等级：达人。金牌员工，任何伪装推广都逃不过你的准星"
                 else -> "评价等级：传说。终极打工鱿，这片信息流已被彻底净化！"
             }
         }
