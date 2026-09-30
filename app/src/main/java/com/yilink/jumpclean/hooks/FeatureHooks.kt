@@ -251,21 +251,22 @@ object FeatureHooks {
                                 }
                             }
 
+                            var isYearActuallyRestored = false
                             if (targetId != null) {
                                 val cachedDate = synchronized(postDateCache) { postDateCache[targetId] }
                                 if (cachedDate != null && !JumpConstants.REGEX_HAS_YEAR.containsMatchIn(newText)) {
                                     val validated = applyValidatedYear(newText, cachedDate)
                                     if (validated != null) {
                                         newText = validated
+                                        isYearActuallyRestored = true
                                     }
                                 }
                             }
 
-                            if (newText.contains("image", ignoreCase = true)) {
-                                newText = newText.replace(JumpConstants.REGEX_IMAGE_CLEAN, "").trim()
-                            }
-
-                            if (newText != incomingText) {
+                            if (isYearActuallyRestored) {
+                                if (newText.contains("image", ignoreCase = true)) {
+                                    newText = newText.replace(JumpConstants.REGEX_IMAGE_CLEAN, "").trim()
+                                }
                                 param.args[0] = newText
                                 val now = SystemClock.uptimeMillis()
                                 if (now - lastYearRestoreLogTime > 2000L) {

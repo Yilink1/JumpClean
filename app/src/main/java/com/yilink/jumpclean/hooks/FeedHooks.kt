@@ -79,10 +79,8 @@ object FeedHooks {
         // 2. 启动期定位并 Hook BRVAH 评测列表适配器（BaseQuickAdapter / q62，支持游戏详情页评测列表）
         hookBrvahAdaptersAtStartup(lpparam)
 
-        // 3. 仅在启动期未命中 BRV 基类时，才开启 RecyclerView.setAdapter 动态探针兜底
-        if (brvBaseClass == null) {
-            hookRecyclerViewSetAdapter(lpparam)
-        }
+        // 3. 常驻开启 RecyclerView.setAdapter 动态探针，捕获游戏详情页评测等动态加载的 Adapter
+        hookRecyclerViewSetAdapter(lpparam)
     }
 
     private fun getHostVersionCode(context: Context?): Int {
@@ -241,10 +239,14 @@ object FeedHooks {
             XposedBridge.hookAllMethods(rvClass, "setAdapter", object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val adapter = param.args.getOrNull(0) ?: return
-                    val clsName = adapter.javaClass.name.lowercase()
+                    val cls = adapter.javaClass
+                    val clsName = cls.name.lowercase()
                     if (clsName.contains("ninegrid") || clsName.contains("photoview") || clsName.contains("indicator")) return
 
-                    ensureAdapterClassHooked(adapter.javaClass, lpparam)
+                    if (!hookedAdapterClasses.contains(cls.name)) {
+                        ConfigManager.log("[Probe] 动态捕获列表适配器: ${cls.simpleName} (${cls.name})")
+                        ensureAdapterClassHooked(cls, lpparam)
+                    }
 
                     // 检查已挂载数据（防止在 setAdapter 之前就已注入旧数据）
                     val isPromoEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
@@ -254,7 +256,7 @@ object FeedHooks {
                     }
                 }
             })
-            ConfigManager.log("[Hook] RecyclerView.setAdapter 动态探针就绪")
+            ConfigManager.log("[Hook] 列表动态探针已就绪")
         } catch (e: Exception) {
             ConfigManager.logError("✘ RecyclerView.setAdapter Hook 失败", e)
         }
@@ -475,7 +477,9 @@ object FeedHooks {
             if (cachedField != null && cachedField.declaringClass.isInstance(adapter)) {
                 val value = cachedField.get(adapter)
                 if (value is MutableList<*>) {
-                    filterPromoList(value, isPromoEnabled, isKeywordEnabled)
+                    if (filterPromoList(value, isPromoEnabled, isKeywordEnabled)) {
+                        try { XposedHelpers.callMethod(adapter, "notifyDataSetChanged") } catch (_: Throwable) {}
+                    }
                     return
                 }
             }
@@ -489,7 +493,9 @@ object FeedHooks {
                         val value = field.get(adapter)
                         if (value is MutableList<*>) {
                             cachedModelsField = field
-                            filterPromoList(value, isPromoEnabled, isKeywordEnabled)
+                            if (filterPromoList(value, isPromoEnabled, isKeywordEnabled)) {
+                                try { XposedHelpers.callMethod(adapter, "notifyDataSetChanged") } catch (_: Throwable) {}
+                            }
                             return
                         }
                     }
@@ -551,32 +557,32 @@ object FeedHooks {
     private fun isPostHitBlockedKeyword(model: Any, matchers: List<KeywordMatcher>): Boolean {
         if (matchers.isEmpty()) return false
         return try {
-            val isTopicDiscuss = model.javaClass.name.contains("TopicDiscuss")
-
-            // 1. 若为评测模型 TopicDiscuss，优先调用逆向出的 getContentLineStr()
-            if (isTopicDiscuss) {
-                val fullLine = HookUtils.safeCallStringGetter(model, "getContentLineStr")
-                if (!fullLine.isNullOrEmpty()) {
-                    return matchers.any { it.matches(fullLine) }
-                }
+            // 1. 优先调用富文本行/全文 Getter (如 TopicDiscuss 的 getContentLineStr)
+            val fullLine = HookUtils.safeCallStringGetter(model, "getContentLineStr")
+            if (!fullLine.isNullOrEmpty() && matchers.any { it.matches(fullLine) }) {
+                return true
             }
 
-            // 2. 常规 Getter 读取 (UserContentItem 具有 getTitle / getContent，零异常损耗)
+            // 2. 常规 Getter 读取 (UserContentItem / TopicDiscuss / 评测模型通用)
             val title = HookUtils.safeCallStringGetter(model, "getTitle") ?: ""
             val content = HookUtils.safeCallStringGetter(model, "getContent") ?: ""
-            val comment = if (isTopicDiscuss) HookUtils.safeCallStringGetter(model, "getComment") ?: "" else ""
+            val comment = HookUtils.safeCallStringGetter(model, "getComment") ?: ""
+            val text = HookUtils.safeCallStringGetter(model, "getText") ?: ""
 
-            if (title.isNotEmpty() || content.isNotEmpty() || comment.isNotEmpty()) {
+            if (title.isNotEmpty() || content.isNotEmpty() || comment.isNotEmpty() || text.isNotEmpty()) {
                 return matchers.any { matcher ->
                     (title.isNotEmpty() && matcher.matches(title)) ||
                             (content.isNotEmpty() && matcher.matches(content)) ||
-                            (comment.isNotEmpty() && matcher.matches(comment))
+                            (comment.isNotEmpty() && matcher.matches(comment)) ||
+                            (text.isNotEmpty() && matcher.matches(text))
                 }
             }
 
-            // 3. 兜底字段读取（仅在 Getter 全部未取到时安全读取，绝不无故反射）
-            val fallback = HookUtils.safeGetObjectField(model, if (isTopicDiscuss) "comment" else "content")?.toString()
+            // 3. 兜底字段读取（仅在 Getter 全部未取到时安全反射）
+            val fallback = HookUtils.safeGetObjectField(model, "comment")?.toString()
+                ?: HookUtils.safeGetObjectField(model, "content")?.toString()
                 ?: HookUtils.safeGetObjectField(model, "title")?.toString()
+                ?: HookUtils.safeGetObjectField(model, "text")?.toString()
                 ?: ""
             if (fallback.isNotEmpty()) {
                 matchers.any { it.matches(fallback) }
