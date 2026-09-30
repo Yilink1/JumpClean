@@ -37,6 +37,7 @@ object SplashHooks {
         hookFakeNotificationPermission(lpparam)
         ensureVoucherDialogHooked(lpparam.classLoader)
         hookDialogFragmentShow(lpparam.classLoader)
+        hookNotificationAd(lpparam.classLoader)
     }
 
     private fun ensureVoucherDialogHooked(classLoader: ClassLoader) {
@@ -374,6 +375,36 @@ object SplashHooks {
             }
         } catch (e: Exception) {
             ConfigManager.logError("原生 NotificationManager Hook 失败", e)
+        }
+    }
+
+    private fun hookNotificationAd(classLoader: ClassLoader) {
+        // 极致性能：用户未开启时彻底 0 Hook、0 JNI 跳板、0 虚拟机侵入
+        if (!ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_BLOCK_NOTIFICATION_AD)) {
+            return
+        }
+
+        // 核心架构层拦截：GlobalViewModel.onReceiveMessage (阻止前台消息处理与震动横幅派发)
+        try {
+            val globalVmClass = XposedHelpers.findClassIfExists(
+                "com.vgjump.jump.ui.main.func.GlobalViewModel", classLoader
+            ) ?: return
+
+            globalVmClass.declaredMethods.forEach { method ->
+                if (method.name == "onReceiveMessage") {
+                    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                        override fun beforeHookedMethod(param: MethodHookParam) {
+                            if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_BLOCK_NOTIFICATION_AD)) {
+                                param.result = null
+                                ConfigManager.log("✔ [通知阻断] 拦截应用内突袭推送与震动横幅 (GlobalViewModel.onReceiveMessage)")
+                            }
+                        }
+                    })
+                }
+            }
+            ConfigManager.log("[Hook] GlobalViewModel 应用内通知挂载就绪")
+        } catch (e: Throwable) {
+            ConfigManager.logError("Hook GlobalViewModel.onReceiveMessage 异常", e)
         }
     }
 }

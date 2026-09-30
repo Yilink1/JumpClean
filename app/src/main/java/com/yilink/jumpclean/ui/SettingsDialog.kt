@@ -122,6 +122,11 @@ object SettingsDialog {
                 JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST,
                 "屏蔽推荐流小酱推广贴",
                 desc = "累计屏蔽: ${blockedPromoCount} 次"
+            ),
+            SettingItem(
+                JumpConstants.KEY_BLOCK_NOTIFICATION_AD,
+                "屏蔽通知广告",
+                desc = "去除应用内突袭震动与顶部横幅"
             )
         )
 
@@ -210,8 +215,8 @@ object SettingsDialog {
 
         var currentCardLayout: LinearLayout? = null
 
-        // 当前所有功能均已支持无感生效或下一次自然生效，暂无需要强制打断用户的开关
-        val restartRequiredKeys = emptySet<String>()
+        // 屏蔽通知广告在启动期按需挂载，修改后提示重启生效
+        val restartRequiredKeys = setOf(JumpConstants.KEY_BLOCK_NOTIFICATION_AD)
 
         items.forEach { entry ->
             when (entry) {

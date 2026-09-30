@@ -510,7 +510,10 @@ object FeatureHooks {
                 CharSequence::class.java, TextView.BufferType::class.java,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        // 首页或非详情页纳秒级极速返回
+                        // 1. 若功能未开启，纳秒级极速熔断，零操作
+                        if (!ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_ENABLE_COPY)) return
+
+                        // 2. 首页或非详情页纳秒级极速返回
                         val act = SplashHooks.currentActivityName
                         if (!act.contains("Detail")) return
 

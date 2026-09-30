@@ -48,6 +48,7 @@ object JumpConstants {
 
     // 弹窗与小酱
     const val KEY_HIDE_VOUCHER_POPUP = "hide_voucher_popup"
+    const val KEY_BLOCK_NOTIFICATION_AD = "block_notification_ad"
     const val KEY_EXP_BLOCK_OFFICIAL_PROMO_POST = "exp_block_official_promo_post"
     const val KEY_BLOCKED_OFFICIAL_PROMO_COUNT = "blocked_official_promo_count"
 

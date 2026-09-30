@@ -103,7 +103,8 @@ object ConfigManager {
             JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE,
             JumpConstants.KEY_HIDE_GAME_PRICE_ADS,
             JumpConstants.KEY_HIDE_GAME_BOTTOM_TRIAL_AD,
-            JumpConstants.KEY_HIDE_GAME_SECOND_HAND -> false
+            JumpConstants.KEY_HIDE_GAME_SECOND_HAND,
+            JumpConstants.KEY_BLOCK_NOTIFICATION_AD -> false
 
             else -> false
         }

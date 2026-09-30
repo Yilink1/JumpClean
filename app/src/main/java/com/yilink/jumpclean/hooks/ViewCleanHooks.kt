@@ -378,7 +378,6 @@ object ViewCleanHooks {
     private fun hookGameDetailClean(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookGameDetailData(lpparam)
         hookGameDetailUI(lpparam)
-        hookGameDetailFindAdView(lpparam)
         hookGameDetailNetwork(lpparam)
     }
 
@@ -541,111 +540,7 @@ object ViewCleanHooks {
         }
     }
 
-    private fun hookGameDetailFindAdView(lpparam: XC_LoadPackage.LoadPackageParam) {
-        try {
-            // 1. Hook Group.setVisibility: 若受控 IDs 包含 ivFindAD，且开关开启，强制转为 GONE
-            val groupClass = XposedHelpers.findClassIfExists("androidx.constraintlayout.widget.Group", lpparam.classLoader)
-            if (groupClass != null) {
-                XposedBridge.hookAllMethods(groupClass, "setVisibility", object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        try {
-                            val group = param.thisObject as? View ?: return
-                            val findAdId = HookUtils.getCachedResId(group.context, "ivFindAD")
-                            if (findAdId == 0) return
-                            val ids = XposedHelpers.callMethod(group, "getReferencedIds") as? IntArray ?: return
-                            if (ids.contains(findAdId)) {
-                                if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_FIND_AD)) {
-                                    param.args[0] = View.GONE
-                                }
-                            }
-                        } catch (_: Throwable) {}
-                    }
-                })
-            }
 
-            // 2. Hook ImageFilterView (ivFindAD 控件类型)
-            val imageFilterViewClass = XposedHelpers.findClassIfExists("androidx.constraintlayout.utils.widget.ImageFilterView", lpparam.classLoader)
-            if (imageFilterViewClass != null) {
-                // 强制 setVisibility 始终为 GONE
-                XposedBridge.hookAllMethods(imageFilterViewClass, "setVisibility", object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        try {
-                            val view = param.thisObject as? View ?: return
-                            val findAdId = HookUtils.getCachedResId(view.context, "ivFindAD")
-                            if (findAdId != 0 && view.id == findAdId) {
-                                if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_FIND_AD)) {
-                                    param.args[0] = View.GONE
-                                }
-                            }
-                        } catch (_: Throwable) {}
-                    }
-                })
-
-                // 挂载到窗口时强行清零尺寸与边距，并同步折叠父级 Group
-                XposedBridge.hookAllMethods(imageFilterViewClass, "onAttachedToWindow", object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        try {
-                            val view = param.thisObject as? View ?: return
-                            val findAdId = HookUtils.getCachedResId(view.context, "ivFindAD")
-                            if (findAdId != 0 && view.id == findAdId) {
-                                if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_FIND_AD)) {
-                                    HookUtils.collapseView(view)
-                                    (view.parent as? ViewGroup)?.let { parent ->
-                                        for (i in 0 until parent.childCount) {
-                                            val child = parent.getChildAt(i)
-                                            if (child.javaClass.name.contains("Group")) {
-                                                val ids = XposedHelpers.callMethod(child, "getReferencedIds") as? IntArray
-                                                if (ids != null && ids.contains(findAdId)) {
-                                                    HookUtils.collapseView(child)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (_: Throwable) {}
-                    }
-                })
-
-                // 尺寸测量阻断：强行量出 0x0 像素
-                XposedBridge.hookAllMethods(imageFilterViewClass, "onMeasure", object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        try {
-                            val view = param.thisObject as? View ?: return
-                            val findAdId = HookUtils.getCachedResId(view.context, "ivFindAD")
-                            if (findAdId != 0 && view.id == findAdId) {
-                                if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_FIND_AD)) {
-                                    val zeroSpec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.EXACTLY)
-                                    param.args[0] = zeroSpec
-                                    param.args[1] = zeroSpec
-                                }
-                            }
-                        } catch (_: Throwable) {}
-                    }
-                })
-
-                // 图片装载拦截：阻止 Bitmap 写入
-                val setImageHook = object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        try {
-                            val view = param.thisObject as? View ?: return
-                            val findAdId = HookUtils.getCachedResId(view.context, "ivFindAD")
-                            if (findAdId != 0 && view.id == findAdId) {
-                                if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_FIND_AD)) {
-                                    param.result = null
-                                }
-                            }
-                        } catch (_: Throwable) {}
-                    }
-                }
-                XposedBridge.hookAllMethods(imageFilterViewClass, "setImageDrawable", setImageHook)
-                XposedBridge.hookAllMethods(imageFilterViewClass, "setImageBitmap", setImageHook)
-            }
-            ConfigManager.log("[Hook] ivFindAD 与关联 Group 专项防护已就绪")
-        } catch (e: Throwable) {
-            ConfigManager.logError("✘ ivFindAD 专项防护 Hook 异常", e)
-        }
-    }
 
     private fun hookGameDetailNetwork(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {

@@ -76,7 +76,7 @@ object FeedHooks {
         // 1. 启动期尝试定位并 Hook BRV Adapter 基类（优先使用持久化缓存，零性能损耗）
         hookBrvAdaptersAtStartup(lpparam)
 
-        // 2. 启动期定位并 Hook BRVAH 评测列表适配器（BaseQuickAdapter / q62，支持游戏详情页评测列表）
+        // 2. 启动期定位并 Hook BRVAH 列表适配器（BaseQuickAdapter，支持游戏详情页评测等列表）
         hookBrvahAdaptersAtStartup(lpparam)
 
         // 3. 常驻开启 RecyclerView.setAdapter 动态探针，捕获游戏详情页评测等动态加载的 Adapter
@@ -219,10 +219,6 @@ object FeedHooks {
             )
             if (brvahClass != null) {
                 ensureAdapterClassHooked(brvahClass, lpparam)
-            }
-            val q62Class = XposedHelpers.findClassIfExists("q62", lpparam.classLoader)
-            if (q62Class != null) {
-                ensureAdapterClassHooked(q62Class, lpparam)
             }
         } catch (e: Exception) {
             ConfigManager.logError("启动期 BRVAH Hook 异常", e)
@@ -457,9 +453,7 @@ object FeedHooks {
         }
 
         XposedBridge.hookAllMethods(adapterClass, "onBindViewHolder", onBindHook)
-        val desc = if (adapterClass.name == "q62") {
-            "评测列表适配器已挂载: ${adapterClass.simpleName}"
-        } else if (hookCount > 0) {
+        val desc = if (hookCount > 0) {
             "列表适配器已挂载: ${adapterClass.simpleName} ($hookCount 个数据入口)"
         } else {
             "列表适配器已挂载: ${adapterClass.simpleName}"
