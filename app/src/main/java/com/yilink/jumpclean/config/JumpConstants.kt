@@ -51,6 +51,7 @@ object JumpConstants {
     const val KEY_BLOCK_NOTIFICATION_AD = "block_notification_ad"
     const val KEY_EXP_BLOCK_OFFICIAL_PROMO_POST = "exp_block_official_promo_post"
     const val KEY_BLOCKED_OFFICIAL_PROMO_COUNT = "blocked_official_promo_count"
+    const val KEY_SHOW_BEAR_TERMINAL = "show_bear_terminal"
 
     // 关键词屏蔽
     const val KEY_ENABLE_KEYWORD_BLOCK = "enable_keyword_block"

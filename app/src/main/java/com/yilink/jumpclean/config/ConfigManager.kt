@@ -84,7 +84,12 @@ object ConfigManager {
             JumpConstants.KEY_HIDE_DISCOVER_BANNER,
             JumpConstants.KEY_HIDE_POST_AD,
             JumpConstants.KEY_HIDE_WEB_TAB,
-            JumpConstants.KEY_HIDE_LOTTERY_TAB -> true
+            JumpConstants.KEY_HIDE_LOTTERY_TAB,
+            JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST,
+            JumpConstants.KEY_HIDE_GAME_MEMBER_GUIDE,
+            JumpConstants.KEY_HIDE_GAME_FIND_AD,
+            JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE,
+            JumpConstants.KEY_HIDE_GAME_PRICE_ADS -> true
 
             JumpConstants.KEY_HIDE_PUBLISH_TOPIC,
             JumpConstants.KEY_HIDE_PHOTO_WALL,
@@ -96,15 +101,11 @@ object ConfigManager {
             JumpConstants.KEY_HIDE_CONTENT_MEMBER_MASK,
             JumpConstants.KEY_RESTORE_POST_YEAR,
             JumpConstants.KEY_ENABLE_DEBUG_LOG,
-            JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST,
             JumpConstants.KEY_ENABLE_KEYWORD_BLOCK,
-            JumpConstants.KEY_HIDE_GAME_MEMBER_GUIDE,
-            JumpConstants.KEY_HIDE_GAME_FIND_AD,
-            JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE,
-            JumpConstants.KEY_HIDE_GAME_PRICE_ADS,
             JumpConstants.KEY_HIDE_GAME_BOTTOM_TRIAL_AD,
             JumpConstants.KEY_HIDE_GAME_SECOND_HAND,
-            JumpConstants.KEY_BLOCK_NOTIFICATION_AD -> false
+            JumpConstants.KEY_BLOCK_NOTIFICATION_AD,
+            JumpConstants.KEY_SHOW_BEAR_TERMINAL -> false
 
             else -> false
         }
