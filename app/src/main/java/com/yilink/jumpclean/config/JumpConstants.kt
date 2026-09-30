@@ -42,9 +42,9 @@ object JumpConstants {
     const val KEY_HIDE_GAME_MEMBER_GUIDE = "hide_game_member_guide"
     const val KEY_HIDE_GAME_FIND_AD = "hide_game_find_ad"
     const val KEY_HIDE_GAME_DYNAMIC_BUBBLE = "hide_game_dynamic_bubble"
-    const val KEY_HIDE_GAME_EXTRA_BADGE = "hide_game_extra_badge"
     const val KEY_HIDE_GAME_PRICE_ADS = "hide_game_price_ads"
     const val KEY_HIDE_GAME_BOTTOM_TRIAL_AD = "hide_game_bottom_trial_ad"
+    const val KEY_HIDE_GAME_SECOND_HAND = "hide_game_second_hand"
 
     // 弹窗与小酱
     const val KEY_HIDE_VOUCHER_POPUP = "hide_voucher_popup"

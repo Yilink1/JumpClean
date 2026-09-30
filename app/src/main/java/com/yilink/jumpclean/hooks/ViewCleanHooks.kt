@@ -502,15 +502,14 @@ object ViewCleanHooks {
 
     fun applyGameDetailClean(activity: Activity) {
         try {
-            val hideMemberGuide = ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_GAME_MEMBER_GUIDE)
-            val hideExtraBadge = ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_GAME_EXTRA_BADGE)
+            val hideMemberAd = ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_GAME_MEMBER_GUIDE)
             val hideFindAd = ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_GAME_FIND_AD)
 
-            // 1. 会员开通引导条 (clMemberGuide) - 静态控件，仅折叠自身
+            // 1. 会员广告：开通引导条 (clMemberGuide) - 静态控件，仅折叠自身
             val memberGuideId = HookUtils.getCachedResId(activity, "clMemberGuide")
             if (memberGuideId != 0) {
                 activity.findViewById<View>(memberGuideId)?.let { v ->
-                    if (hideMemberGuide) {
+                    if (hideMemberAd) {
                         HookUtils.collapseView(v)
                     } else if (HookUtils.isCollapsed(v)) {
                         HookUtils.restoreView(v)
@@ -518,7 +517,7 @@ object ViewCleanHooks {
                 }
             }
 
-            // 2. 会员专属优惠标识 (ivExtra) 与促销卡券横幅 (ivFindAD) - 递归扫描整个视图树精准折叠
+            // 2. 会员广告：ONLINE 会员/专属标识 (ivExtra) 与促销横幅 (ivFindAD) - 递归扫描整个视图树精准折叠
             val extraId = HookUtils.getCachedResId(activity, "ivExtra")
             val findAdId = HookUtils.getCachedResId(activity, "ivFindAD")
             val decor = activity.window?.decorView
@@ -526,7 +525,7 @@ object ViewCleanHooks {
                 val activeIds = HashSet<Int>()
                 val restoreIds = HashSet<Int>()
                 if (extraId != 0) {
-                    if (hideExtraBadge) activeIds.add(extraId)
+                    if (hideMemberAd) activeIds.add(extraId)
                     else if (HookUtils.hasCollapsedViews()) restoreIds.add(extraId)
                 }
                 if (findAdId != 0) {
@@ -676,6 +675,23 @@ object ViewCleanHooks {
                                 return@newProxyInstance resp
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 伪造 /jmall/order/recently 响应失败，回退原生请求", e)
+                            }
+                        }
+                    }
+
+                    // 1.5 二手比价纯网络断电：/jmall/second_hand/sell_supplier_quotation 直接返回空数据
+                    if (urlStr.contains("/jmall/second_hand/sell_supplier_quotation")) {
+                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_SECOND_HAND)) {
+                            try {
+                                val resp = createMockJsonResponse(
+                                    lpparam.classLoader,
+                                    request,
+                                    """{"success":true,"code":200,"msg":"成功","data":[]}"""
+                                )
+                                ConfigManager.log("✔ [网络阻断] 拦截二手比价数据 (/jmall/second_hand/sell_supplier_quotation)")
+                                return@newProxyInstance resp
+                            } catch (e: Throwable) {
+                                ConfigManager.logError("✘ 伪造 /jmall/second_hand/sell_supplier_quotation 响应失败，回退原生请求", e)
                             }
                         }
                     }

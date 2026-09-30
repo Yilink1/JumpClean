@@ -101,9 +101,9 @@ object ConfigManager {
             JumpConstants.KEY_HIDE_GAME_MEMBER_GUIDE,
             JumpConstants.KEY_HIDE_GAME_FIND_AD,
             JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE,
-            JumpConstants.KEY_HIDE_GAME_EXTRA_BADGE,
             JumpConstants.KEY_HIDE_GAME_PRICE_ADS,
-            JumpConstants.KEY_HIDE_GAME_BOTTOM_TRIAL_AD -> false
+            JumpConstants.KEY_HIDE_GAME_BOTTOM_TRIAL_AD,
+            JumpConstants.KEY_HIDE_GAME_SECOND_HAND -> false
 
             else -> false
         }

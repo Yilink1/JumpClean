@@ -76,12 +76,12 @@ object SettingsDialog {
             SettingItem(JumpConstants.KEY_HIDE_DISCOVER_BANNER, "屏蔽轮播广告"),
 
             SectionHeader("游戏折扣页"),
-            SettingItem(JumpConstants.KEY_HIDE_GAME_MEMBER_GUIDE, "屏蔽会员开通引导条"),
-            SettingItem(JumpConstants.KEY_HIDE_GAME_FIND_AD, "屏蔽促销卡券横幅"),
-            SettingItem(JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE, "屏蔽动态购买弹幕"),
-            SettingItem(JumpConstants.KEY_HIDE_GAME_EXTRA_BADGE, "屏蔽会员专属标识"),
-            SettingItem(JumpConstants.KEY_HIDE_GAME_PRICE_ADS, "屏蔽低价榜推广及「去购买」"),
-            SettingItem(JumpConstants.KEY_HIDE_GAME_BOTTOM_TRIAL_AD, "屏蔽底栏「购前体验」及充值横幅"),
+            SettingItem(JumpConstants.KEY_HIDE_GAME_MEMBER_GUIDE, "屏蔽会员广告"),
+            SettingItem(JumpConstants.KEY_HIDE_GAME_FIND_AD, "屏蔽促销横幅广告"),
+            SettingItem(JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE, "屏蔽滚动营销弹幕"),
+            SettingItem(JumpConstants.KEY_HIDE_GAME_PRICE_ADS, "屏蔽低价排名广告"),
+            SettingItem(JumpConstants.KEY_HIDE_GAME_BOTTOM_TRIAL_AD, "隐藏「购前体验」按钮"),
+            SettingItem(JumpConstants.KEY_HIDE_GAME_SECOND_HAND, "隐藏「二手比价」栏"),
 
             SectionHeader("内容与详情"),
             SettingItem(JumpConstants.KEY_ENABLE_COPY, "允许长按复制文本"),
