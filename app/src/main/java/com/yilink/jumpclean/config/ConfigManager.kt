@@ -191,25 +191,17 @@ object ConfigManager {
         }
     }
 
-    fun recordOfficialPromoBlocked(adId: String, content: String) {
+    fun recordOfficialPromoBlocked() {
         try {
-            log("✔ [数据层剔除] 物理移除 Jump小酱推广帖子: adId=$adId, content=$content")
-
-            val app = getValidAppContext()
-            if (app == null) {
-                logError("✘ 计数失败：AppContext 为空，无法写入 SharedPreferences")
-                return
-            }
+            val app = getValidAppContext() ?: return
 
             val sp = app.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
             if (blockedPromoCounter.get() == -1) {
                 val currentSaved = sp.getInt(JumpConstants.KEY_BLOCKED_OFFICIAL_PROMO_COUNT, 0)
                 blockedPromoCounter.set(currentSaved)
-                log("[计数器初始化] 从 SP 读取到初始值: $currentSaved")
             }
 
-            val newCount = blockedPromoCounter.incrementAndGet()
-            log("[计数器递增] 内存当前计数值: $newCount")
+            blockedPromoCounter.incrementAndGet()
 
             debounceHandler.removeCallbacks(saveCounterRunnable)
             debounceHandler.postDelayed(saveCounterRunnable, 1000L)

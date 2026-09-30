@@ -178,8 +178,8 @@ object LogDialog {
         val contentBg = if (isDark) Color.parseColor("#2C2C2E") else Color.parseColor("#F5F5F7")
         val primaryText = if (isDark) Color.parseColor("#F5F5F7") else Color.parseColor("#1D1D1F")
         val secondaryText = if (isDark) Color.parseColor("#8E8E93") else Color.parseColor("#86868B")
-        val accentRed = Color.parseColor("#FF5252")
-        val successGreen = Color.parseColor("#00B06F")
+        val accentRed = if (isDark) Color.parseColor("#FF5252") else Color.parseColor("#DC2626")
+        val successGreen = if (isDark) Color.parseColor("#34D399") else Color.parseColor("#157347")
 
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -333,17 +333,21 @@ object LogDialog {
                 ssb.append(line)
                 val end = ssb.length
 
-                // 时间戳变淡灰
-                if (line.startsWith("[") && line.length >= 10 && line[9] == ']') {
+                val msgStart = if (line.startsWith("[") && line.length >= 11 && line[9] == ']') {
                     ssb.setSpan(ForegroundColorSpan(secondaryText), start, start + 10, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    start + 11
+                } else {
+                    start
                 }
 
                 // 错误标红加粗
                 if (line.contains("[ERR]")) {
-                    ssb.setSpan(ForegroundColorSpan(accentRed), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    ssb.setSpan(StyleSpan(Typeface.BOLD), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    ssb.setSpan(ForegroundColorSpan(accentRed), msgStart, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    ssb.setSpan(StyleSpan(Typeface.BOLD), msgStart, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                 } else if (line.contains("✔")) {
-                    ssb.setSpan(ForegroundColorSpan(successGreen), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    ssb.setSpan(ForegroundColorSpan(successGreen), msgStart, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                } else if (line.contains("[Hook]") || line.contains("[Init]") || line.contains("[Probe]")) {
+                    ssb.setSpan(ForegroundColorSpan(secondaryText), msgStart, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
 
                 if (index < logs.size - 1) {

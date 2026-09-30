@@ -113,7 +113,6 @@ object FeedHooks {
             if (!cachedName.isNullOrBlank() && cachedVersion == currentVersion) {
                 val cls = XposedHelpers.findClassIfExists(cachedName, classLoader)
                 if (cls != null) {
-                    ConfigManager.log("✔ [持久化缓存命中] 直接加载已缓存 BRV Adapter: $cachedName")
                     return cls
                 }
             }
@@ -124,7 +123,6 @@ object FeedHooks {
         for (name in knownNames) {
             try {
                 val cls = XposedHelpers.findClassIfExists(name, classLoader) ?: continue
-                ConfigManager.log("✔ 命中已知 BRV Adapter 类名: $name")
                 saveBrvClassToCache(name, currentVersion)
                 return cls
             } catch (_: Exception) {}
@@ -147,7 +145,6 @@ object FeedHooks {
                 .putString(PREF_CACHED_BRV_CLASS, className)
                 .putInt(PREF_CACHED_BRV_VERSION, v)
                 .apply()
-            ConfigManager.log("✔ 已将 BRV Adapter 类名持久化至本地缓存: $className (版本 $v)")
         } catch (_: Throwable) {}
     }
 
@@ -191,7 +188,7 @@ object FeedHooks {
                     }
 
                     if (hasItemTouchHelper || (hasRv && hasCollections)) {
-                        ConfigManager.log("✔ 动态 DEX 特征扫描定位到 BRV Adapter: $className")
+                        ConfigManager.log("[Hook] DEX 动态扫描定位到 BRV Adapter: $className")
                         return cls
                     }
                 }
@@ -209,9 +206,8 @@ object FeedHooks {
             if (adapterClass != null) {
                 brvBaseClass = adapterClass
                 ensureAdapterClassHooked(adapterClass, lpparam)
-                ConfigManager.log("✔ 启动期 BRV Adapter 基类 Hook 已安装: ${adapterClass.name}")
             } else {
-                ConfigManager.log("⚠ 启动期未直接定位到 BRV 基类，已切换至 setAdapter 动态探针兜底")
+                ConfigManager.log("[Hook] 未直接命中 BRV 基类，已开启 setAdapter 动态探针兜底")
             }
         } catch (e: Exception) {
             ConfigManager.logError("启动期 BRV Hook 异常", e)
@@ -225,12 +221,10 @@ object FeedHooks {
             )
             if (brvahClass != null) {
                 ensureAdapterClassHooked(brvahClass, lpparam)
-                ConfigManager.log("✔ 启动期 BRVAH BaseQuickAdapter 基类 Hook 已安装: ${brvahClass.name}")
             }
             val q62Class = XposedHelpers.findClassIfExists("q62", lpparam.classLoader)
             if (q62Class != null) {
                 ensureAdapterClassHooked(q62Class, lpparam)
-                ConfigManager.log("✔ 启动期评测适配器 q62 Hook 已安装")
             }
         } catch (e: Exception) {
             ConfigManager.logError("启动期 BRVAH Hook 异常", e)
@@ -260,7 +254,7 @@ object FeedHooks {
                     }
                 }
             })
-            ConfigManager.log("✔ RecyclerView.setAdapter 动态探针 Hook 已就绪")
+            ConfigManager.log("[Hook] RecyclerView.setAdapter 动态探针就绪")
         } catch (e: Exception) {
             ConfigManager.logError("✘ RecyclerView.setAdapter Hook 失败", e)
         }
@@ -338,7 +332,6 @@ object FeedHooks {
                     try {
                         XposedBridge.hookMethod(method, filterDataHook)
                         hookCount++
-                        ConfigManager.log("[Adapter方法挂载] 成功拦截数据输入方法: ${adapterClass.simpleName}.${method.name}")
                     } catch (_: Throwable) {}
                 }
             }
@@ -449,7 +442,7 @@ object FeedHooks {
                             val nowTime = SystemClock.uptimeMillis()
                             if (nowTime - lastAdCollapseLogTime > 1000L) {
                                 lastAdCollapseLogTime = nowTime
-                                ConfigManager.log("🛡 [UI层折叠] 拦截推荐流/帖子商业广告 ($resName)")
+                                ConfigManager.log("✔ [视图折叠] 推荐流商业广告 ($resName)")
                             }
                         } else if (HookUtils.isCollapsed(itemView)) {
                             HookUtils.restoreView(itemView)
@@ -462,7 +455,14 @@ object FeedHooks {
         }
 
         XposedBridge.hookAllMethods(adapterClass, "onBindViewHolder", onBindHook)
-        ConfigManager.log("✔ 已为 ${adapterClass.name} 挂载 onBindViewHolder 与 $hookCount 个数据拦截方法")
+        val desc = if (adapterClass.name == "q62") {
+            "评测列表适配器已挂载: ${adapterClass.simpleName}"
+        } else if (hookCount > 0) {
+            "列表适配器已挂载: ${adapterClass.simpleName} ($hookCount 个数据入口)"
+        } else {
+            "列表适配器已挂载: ${adapterClass.simpleName}"
+        }
+        ConfigManager.log("[Hook] $desc")
     }
 
     /**
@@ -530,12 +530,8 @@ object FeedHooks {
             if (isPromoEnabled && isFromRecommendStream && isOfficialPromoModel(item)) {
                 iterator.remove()
                 modified = true
-                val content = HookUtils.safeCallStringGetter(item, "getContent") ?: ""
-                val adId = HookUtils.safeGetObjectField(item, "adId")?.toString()
-                    ?: fieldAdId?.get(item)?.toString()
-                    ?: ""
-                ConfigManager.recordOfficialPromoBlocked(adId, content)
-                ConfigManager.log("✔ [数据层剔除] 推荐流命中官方推广规则，已移除条目")
+                ConfigManager.recordOfficialPromoBlocked()
+                ConfigManager.log("✔ [数据剔除] 推荐流命中官方推广规则")
                 continue
             }
 
@@ -545,7 +541,7 @@ object FeedHooks {
                 if (shouldCheckKeyword && isPostHitBlockedKeyword(item, matchers)) {
                     iterator.remove()
                     modified = true
-                    ConfigManager.log("✔ [数据层剔除] 命中屏蔽词规则 ($keywordScope)，已移除帖子")
+                    ConfigManager.log("✔ [数据剔除] 命中屏蔽词规则 ($keywordScope)")
                 }
             }
         }

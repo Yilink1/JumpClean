@@ -99,11 +99,57 @@ object HookUtils {
         }
     }
 
+    private val REGEX_LOG_COUNT = Regex("""^(.*?) \(x(\d+)\)$""")
+
+    private fun parseLogLine(line: String): Triple<String, String, Int> {
+        val ts = if (line.startsWith("[") && line.length >= 10 && line[9] == ']') line.substring(0, 10) else ""
+        val body = if (ts.isNotEmpty()) line.substring(10).trimStart() else line
+        val match = REGEX_LOG_COUNT.matchEntire(body)
+        val base = match?.groupValues?.get(1) ?: body
+        val count = match?.groupValues?.get(2)?.toIntOrNull() ?: 1
+        return Triple(ts, base, count)
+    }
+
     private fun appendHistory(line: String, immediateFlush: Boolean = false) {
         loadHistoricalLogsIfNeeded()
-        logHistory.addLast(line)
-        while (logHistory.size > MAX_LOG_HISTORY) {
-            logHistory.pollFirst()
+        synchronized(logHistory) {
+            val (currentTimestamp, currentBody, _) = parseLogLine(line)
+
+            // 智能折叠：检查最近 4 条日志内是否存在相同的拦截主体（支持交替多端点刷新的合并折叠）
+            val list = logHistory.toList()
+            val lookbackLimit = minOf(4, list.size)
+            var matchIndex = -1
+            var matchBase = ""
+            var matchCount = 1
+
+            for (i in (list.size - 1) downTo (list.size - lookbackLimit)) {
+                val item = list[i]
+                val (_, itemBase, itemCount) = parseLogLine(item)
+                if (itemBase == currentBody) {
+                    matchIndex = i
+                    matchBase = itemBase
+                    matchCount = itemCount
+                    break
+                }
+            }
+
+            if (matchIndex != -1) {
+                val newCount = matchCount + 1
+                val updatedLine = if (currentTimestamp.isNotEmpty()) "$currentTimestamp $matchBase (x$newCount)" else "$matchBase (x$newCount)"
+                logHistory.clear()
+                list.forEachIndexed { idx, oldLine ->
+                    if (idx == matchIndex) {
+                        logHistory.addLast(updatedLine)
+                    } else {
+                        logHistory.addLast(oldLine)
+                    }
+                }
+            } else {
+                logHistory.addLast(line)
+                while (logHistory.size > MAX_LOG_HISTORY) {
+                    logHistory.pollFirst()
+                }
+            }
         }
         if (immediateFlush) {
             saveLogs(sync = true)

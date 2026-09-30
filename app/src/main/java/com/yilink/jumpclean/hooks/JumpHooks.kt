@@ -13,7 +13,7 @@ object JumpHooks {
         if (lpparam.packageName != JumpConstants.TARGET_PACKAGE) return
 
         ConfigManager.init(lpparam)
-        ConfigManager.log("JumpClean 开始加载")
+        ConfigManager.log("[Init] JumpClean 开始加载")
 
         // 1. 框架与开屏加速层（秒跳 Splash、Byazt 快速失败、延迟压缩、营销弹窗阻断）
         SplashHooks.hook(lpparam)
@@ -30,6 +30,6 @@ object JumpHooks {
         // 5. 设置入口挂载（原生设置页第一项插入、长按「我的」Tab 快捷入口）
         SettingsEntryHooks.hook(lpparam)
 
-        ConfigManager.log("JumpClean 加载完成")
+        ConfigManager.log("[Init] JumpClean 加载完成")
     }
 }

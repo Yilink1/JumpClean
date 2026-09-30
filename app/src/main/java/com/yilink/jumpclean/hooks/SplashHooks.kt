@@ -61,7 +61,7 @@ object SplashHooks {
                             override fun beforeHookedMethod(param: MethodHookParam) {
                                 if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
                                     param.result = null
-                                    ConfigManager.log("✔ [源头阻断] 拦截营销弹窗请求: ${vmClass.simpleName}.${method.name}")
+                                    ConfigManager.log("✔ [弹窗阻断] 拦截营销弹窗请求: ${vmClass.simpleName}.${method.name}")
                                 }
                             }
                         })
@@ -81,7 +81,7 @@ object SplashHooks {
                         override fun beforeHookedMethod(param: MethodHookParam) {
                             if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
                                 param.result = Unit
-                                ConfigManager.log("✔ [协程阻断] 拦截营销弹窗协程: $coroutineClassName")
+                                ConfigManager.log("✔ [弹窗阻断] 拦截营销弹窗协程: $coroutineClassName")
                             }
                         }
                     })
@@ -91,7 +91,7 @@ object SplashHooks {
 
             if (hookedCount > 0) {
                 success = true
-                ConfigManager.log("✔ 屏蔽营销弹窗 Hook 已就绪 ($className, $hookedCount 个挂载点)")
+                ConfigManager.log("[Hook] 营销弹窗屏蔽挂载就绪 ($className, $hookedCount 个挂载点)")
             }
         }
 
@@ -117,13 +117,13 @@ object SplashHooks {
 
                     if (isVoucher && ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
                         param.result = null
-                        ConfigManager.log("✔ [展示层阻断] 拦截营销 DialogFragment: $className (tag=$tag)")
+                        ConfigManager.log("✔ [弹窗阻断] 拦截营销 DialogFragment: $className (tag=$tag)")
                     }
                 }
             }
             XposedBridge.hookAllMethods(dfClass, "show", dismissHook)
             XposedBridge.hookAllMethods(dfClass, "showNow", dismissHook)
-            ConfigManager.log("✔ DialogFragment 营销弹窗展示层拦截就绪")
+            ConfigManager.log("[Hook] DialogFragment 营销弹窗展示层拦截就绪")
         } catch (e: Throwable) {
             ConfigManager.log("Hook DialogFragment.show 异常: ${e.message}")
         }
@@ -149,7 +149,7 @@ object SplashHooks {
                     }
                     activity.startActivity(mainIntent)
                     activity.finish()
-                    ConfigManager.log("✔ 瞬时穿透 SplashActivity 成功 (热/冷启动加速)")
+                    ConfigManager.log("✔ [开屏穿透] 瞬时穿透 SplashActivity 成功 (热/冷启动加速)")
                 } catch (e: Exception) {
                     ConfigManager.logError("瞬跳 MainActivity 失败", e)
                 }
@@ -166,7 +166,7 @@ object SplashHooks {
                 (param.thisObject as? Activity)?.let { jumpAction(it) }
             }
         })
-        ConfigManager.log("✔ SplashActivity 穿透 Hook 已就绪")
+        ConfigManager.log("[Hook] SplashActivity 穿透挂载完成")
     }
 
     private fun hookByaztFastFail(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -192,7 +192,7 @@ object SplashHooks {
                     }
                 }
             })
-            ConfigManager.log("✔ Byazt 开屏请求快速阻断 Hook 已安装")
+            ConfigManager.log("[Hook] Byazt 开屏阻断挂载完成")
         } catch (e: Exception) {
             ConfigManager.logError("✘ Byazt 请求级 Hook 失败", e)
         }
@@ -247,7 +247,7 @@ object SplashHooks {
                     } catch (_: Exception) {}
                 }
             })
-            ConfigManager.log("✔ Byazt 开屏渲染基类 Hook 已安装")
+            ConfigManager.log("[Hook] Byazt 渲染基类挂载完成")
         } catch (e: Exception) {
             ConfigManager.logError("✘ Byazt 渲染基类 Hook 失败", e)
         }
@@ -281,7 +281,7 @@ object SplashHooks {
                     }
                 }
             )
-            ConfigManager.log("✔ 启动延迟瞬时压缩 Hook 已安装")
+            ConfigManager.log("[Hook] 启动延迟瞬时压缩已就绪")
         } catch (e: Exception) {
             ConfigManager.logError("✘ 启动延迟压缩 Hook 失败", e)
         }
@@ -337,7 +337,7 @@ object SplashHooks {
                         if (name.contains("MainActivity")) {
                             mainActivitySeen = false
                             processStartTime = SystemClock.uptimeMillis()
-                            ConfigManager.log("✔ MainActivity 退出销毁，重置启动加速探针")
+                            ConfigManager.log("[Probe] MainActivity 退出销毁，重置启动加速探针")
                         }
                     } catch (_: Exception) {}
                 }
@@ -360,7 +360,7 @@ object SplashHooks {
             val compatClass = XposedHelpers.findClassIfExists("androidx.core.app.NotificationManagerCompat", lpparam.classLoader)
             if (compatClass != null) {
                 XposedHelpers.findAndHookMethod(compatClass, "areNotificationsEnabled", returnTrueHook)
-                ConfigManager.log("✔ NotificationManagerCompat 权限伪造 Hook 已安装")
+                ConfigManager.log("[Hook] NotificationManagerCompat 权限伪造已就绪")
             }
         } catch (e: Exception) {
             ConfigManager.logError("NotificationManagerCompat Hook 失败", e)
@@ -370,7 +370,7 @@ object SplashHooks {
             val nmClass = XposedHelpers.findClassIfExists("android.app.NotificationManager", lpparam.classLoader)
             if (nmClass != null) {
                 XposedHelpers.findAndHookMethod(nmClass, "areNotificationsEnabled", returnTrueHook)
-                ConfigManager.log("✔ 原生 NotificationManager 权限伪造 Hook 已安装")
+                ConfigManager.log("[Hook] 原生 NotificationManager 权限伪造已就绪")
             }
         } catch (e: Exception) {
             ConfigManager.logError("原生 NotificationManager Hook 失败", e)

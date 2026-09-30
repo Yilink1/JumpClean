@@ -28,6 +28,9 @@ object FeatureHooks {
     private val postDateCache = Collections.synchronizedMap(LinkedHashMap<String, String>())
     private const val POST_DATE_CACHE_MAX_SIZE = 500
 
+    @Volatile
+    private var lastYearRestoreLogTime = 0L
+
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookUserContentItemModel(lpparam)
         hookTopicDiscussModel(lpparam)
@@ -64,7 +67,7 @@ object FeatureHooks {
                     } catch (_: Exception) {}
                 }
             })
-            ConfigManager.log("✔ UserContentItem 社区数据模型 Hook 已安装")
+            ConfigManager.log("[Hook] 社区数据模型已就绪")
         } catch (e: Exception) {
             ConfigManager.logError("✘ UserContentItem 数据模型 Hook 失败", e)
         }
@@ -99,7 +102,7 @@ object FeatureHooks {
                     } catch (_: Exception) {}
                 }
             })
-            ConfigManager.log("✔ TopicDiscuss 评测数据 getter 拦截 Hook 已就绪")
+            ConfigManager.log("[Hook] 评测数据模型已就绪")
         } catch (e: Exception) {
             ConfigManager.logError("✘ TopicDiscuss 数据模型 Hook 失败", e)
         }
@@ -181,7 +184,11 @@ object FeatureHooks {
 
             val newText = applyValidatedYear(currentText, fullDate) ?: return
             tvDate.text = newText
-            ConfigManager.log("✔ [列表条目年份还原] $currentText -> $newText")
+            val now = SystemClock.uptimeMillis()
+            if (now - lastYearRestoreLogTime > 2000L) {
+                lastYearRestoreLogTime = now
+                ConfigManager.log("✔ [年份还原] 列表发帖时间: $currentText -> $newText")
+            }
 
         } catch (t: Throwable) {
             ConfigManager.logError("✘ [列表条目年份异常]: ${t.javaClass.simpleName} - ${t.message}")
@@ -260,7 +267,11 @@ object FeatureHooks {
 
                             if (newText != incomingText) {
                                 param.args[0] = newText
-                                ConfigManager.log("✔ [详情页年份还原] 拦截渲染: $incomingText -> $newText")
+                                val now = SystemClock.uptimeMillis()
+                                if (now - lastYearRestoreLogTime > 2000L) {
+                                    lastYearRestoreLogTime = now
+                                    ConfigManager.log("✔ [年份还原] 详情页时间渲染: $incomingText -> $newText")
+                                }
                             }
                         } catch (e: Exception) {
                             ConfigManager.logError("年份缓存读取异常", e)
@@ -268,7 +279,7 @@ object FeatureHooks {
                     }
                 }
             )
-            ConfigManager.log("✔ 帖子年份缓存读取 Hook 已安装")
+            ConfigManager.log("[Hook] 帖子年份缓存已就绪")
         } catch (e: Exception) {
             ConfigManager.logError("✘ 帖子年份缓存读取 Hook 失败", e)
         }
@@ -386,7 +397,7 @@ object FeatureHooks {
                     }
                 })
             }
-            ConfigManager.log("✔ WebView 文章复制解锁 Hook 已安装")
+            ConfigManager.log("[Hook] WebView 复制解锁已就绪")
         } catch (e: Exception) {
             ConfigManager.logError("✘ WebView 文章复制解锁 Hook 失败", e)
         }
@@ -506,7 +517,7 @@ object FeatureHooks {
                     }
                 }
             )
-            ConfigManager.log("✔ 原生 TextView 复制解锁已优化 (已剥离全局 View Hook，接入话题点击保护)")
+            ConfigManager.log("[Hook] 原生 TextView 复制解锁已优化 (接入话题点击保护)")
         } catch (e: Exception) {
             ConfigManager.logError("✘ 原生 TextView 复制解锁 Hook 失败", e)
         }

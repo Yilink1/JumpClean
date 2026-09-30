@@ -61,7 +61,7 @@ object ViewCleanHooks {
                     }
                 }
             )
-            ConfigManager.log("✔ 底栏与红点动态 setVisibility 阻断 Hook 已就绪")
+            ConfigManager.log("[Hook] 底栏与红点净化已就绪")
         } catch (e: Exception) {
             ConfigManager.logError("✘ 底栏与红点 setVisibility 阻断 Hook 失败", e)
         }
@@ -95,7 +95,7 @@ object ViewCleanHooks {
                     }
                 }
             )
-            ConfigManager.log("✔ 首页 UI 净化 Hook 已安装")
+            ConfigManager.log("[Hook] 首页 UI 净化已就绪")
         } catch (e: Exception) {
             ConfigManager.logError("✘ 首页 UI 净化 Hook 失败", e)
         }
@@ -247,7 +247,7 @@ object ViewCleanHooks {
                     val now = SystemClock.uptimeMillis()
                     if (now - lastNativeAdLogTime > 1500L) {
                         lastNativeAdLogTime = now
-                        ConfigManager.log("🛡 [广告容器拦截] 折叠腾讯 NativeAdContainer 广告 (推荐流/帖子内嵌)")
+                        ConfigManager.log("✔ [容器折叠] 腾讯 NativeAdContainer (推荐流/帖子内嵌)")
                     }
                 } else if (HookUtils.isCollapsed(view)) {
                     HookUtils.restoreView(view)
@@ -297,7 +297,7 @@ object ViewCleanHooks {
                 }
             })
 
-            ConfigManager.log("✔ 通用广告容器（首页推荐流 + 帖子内嵌）Hook 已安装")
+            ConfigManager.log("[Hook] 商业广告通用容器 Hook 已就绪")
         } catch (e: Exception) {
             ConfigManager.logError("✘ 通用广告容器 Hook 失败", e)
         }
@@ -342,7 +342,7 @@ object ViewCleanHooks {
                 }
             })
         }
-        ConfigManager.log("✔ 游戏评价遮罩纯净单点 Hook 已就绪")
+        ConfigManager.log("[Hook] 游戏评价遮罩纯净单点已就绪")
     }
 
     fun applyContentDetailMemberMaskHide(activity: Activity) {
@@ -401,7 +401,7 @@ object ViewCleanHooks {
                         })
                     }
                 }
-                ConfigManager.log("✔ GameDetailHomeViewModel findAD 协程断电 Hook 已挂载: $className")
+                ConfigManager.log("[Hook] 详情页协程断电已挂载: $className")
             }
 
             // 2. 动态购买弹幕总电闸：OrderRecentlyKt.shouldShowOrderRecentlyBanner 强制返回 false
@@ -426,7 +426,7 @@ object ViewCleanHooks {
                         }
                     }
                 })
-                ConfigManager.log("✔ OrderRecentlyKt 数据断电 Hook 已挂载: $className")
+                ConfigManager.log("[Hook] 订单弹幕断电已挂载: $className")
             }
 
             // 3. GameDetailViewModel 订单轮播协程入口断电 (仅匹配包含 getOrderSlideShow 的安全全名方法)
@@ -475,7 +475,7 @@ object ViewCleanHooks {
                 XposedBridge.hookAllMethods(c, "onCreate", lifecycleHook)
                 c = c.superclass
             }
-            ConfigManager.log("✔ 游戏折扣页单点 UI Hook 已就绪（仅限定 GameDetailActivity 继承链）")
+            ConfigManager.log("[Hook] 游戏折扣页 UI 净化已就绪")
         } catch (e: Exception) {
             ConfigManager.logError("✘ 游戏折扣页 UI Hook 失败", e)
         }
@@ -642,7 +642,7 @@ object ViewCleanHooks {
                 XposedBridge.hookAllMethods(imageFilterViewClass, "setImageDrawable", setImageHook)
                 XposedBridge.hookAllMethods(imageFilterViewClass, "setImageBitmap", setImageHook)
             }
-            ConfigManager.log("✔ ivFindAD 与关联 Group 专项防护 Hook 已就绪")
+            ConfigManager.log("[Hook] ivFindAD 与关联 Group 专项防护已就绪")
         } catch (e: Throwable) {
             ConfigManager.logError("✘ ivFindAD 专项防护 Hook 异常", e)
         }
@@ -672,7 +672,7 @@ object ViewCleanHooks {
                                     request,
                                     """{"success":true,"code":200,"msg":"成功","data":[]}"""
                                 )
-                                ConfigManager.log("⚡ [网络层阻断] 拦截动态购买弹幕 (/jmall/order/recently)")
+                                ConfigManager.log("✔ [网络阻断] 拦截动态购买弹幕 (/jmall/order/recently)")
                                 return@newProxyInstance resp
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 伪造 /jmall/order/recently 响应失败，回退原生请求", e)
@@ -686,7 +686,7 @@ object ViewCleanHooks {
                             val originalResponse = proceedSafe(proceedMethod, chain, request)
                             try {
                                 val cleaned = cleanPriceResponse(lpparam.classLoader, originalResponse)
-                                ConfigManager.log("⚡ [网络层清洗] 过滤低价榜推广项与导购链接 (/jump/price/getAllPriceByGame)")
+                                ConfigManager.log("✔ [网络清洗] 过滤低价榜推广项与导购链接 (/jump/price/getAllPriceByGame)")
                                 return@newProxyInstance cleaned
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 清洗 /jump/price/getAllPriceByGame 异常", e)
@@ -701,7 +701,7 @@ object ViewCleanHooks {
                             val originalResponse = proceedSafe(proceedMethod, chain, request)
                             try {
                                 val cleaned = cleanGameExtResponse(lpparam.classLoader, originalResponse)
-                                ConfigManager.log("⚡ [网络层清洗] 剔除底栏购前体验与充值横幅 (/jump/game/ext)")
+                                ConfigManager.log("✔ [网络清洗] 剔除底栏购前体验与充值横幅 (/jump/game/ext)")
                                 return@newProxyInstance cleaned
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 清洗 /jump/game/ext 异常", e)
@@ -721,7 +721,7 @@ object ViewCleanHooks {
                                         request,
                                         """{"success":false,"code":404,"msg":"Ad blocked","data":null}"""
                                     )
-                                    ConfigManager.log("⚡ [网络层阻断] 拦截促销点卡卡券横幅 (/jmall/product/detail)")
+                                    ConfigManager.log("✔ [网络阻断] 拦截促销点卡卡券横幅 (/jmall/product/detail)")
                                     return@newProxyInstance resp
                                 } catch (e: Throwable) {
                                     ConfigManager.logError("✘ 伪造 /jmall/product/detail 响应失败，回退原生请求", e)
@@ -739,7 +739,7 @@ object ViewCleanHooks {
                                     request,
                                     """{"ret":-1,"msg":"No ad"}"""
                                 )
-                                ConfigManager.log("⚡ [网络层阻断] 拦截腾讯优量汇商业广告 SDK (gdt.qq.com)")
+                                ConfigManager.log("✔ [网络阻断] 拦截腾讯优量汇商业广告 SDK (gdt.qq.com)")
                                 return@newProxyInstance resp
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 伪造 gdt.qq.com 广告响应失败", e)
@@ -755,7 +755,12 @@ object ViewCleanHooks {
                             val originalResponse = proceedSafe(proceedMethod, chain, request)
                             try {
                                 val cleaned = cleanHomeInterestResponse(lpparam.classLoader, originalResponse, hideBanner, hideTopicList)
-                                ConfigManager.log("⚡ [网络层清洗] 首页顶部数据 (轮播=$hideBanner, 话题=$hideTopicList)")
+                                val desc = when {
+                                    hideBanner && hideTopicList -> "清空轮播与话题栏"
+                                    hideBanner -> "清空轮播广告"
+                                    else -> "清空顶部话题栏"
+                                }
+                                ConfigManager.log("✔ [网络清洗] 首页顶部数据 ($desc)")
                                 return@newProxyInstance cleaned
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 清洗 /jump/interest_v2/home 异常", e)
@@ -773,7 +778,7 @@ object ViewCleanHooks {
                                     request,
                                     """{"success":true,"code":0,"msg":"success","data":[]}"""
                                 )
-                                ConfigManager.log("⚡ [网络层阻断] 拦截 Jumper 热议广场 (/jump/subject/squareList)")
+                                ConfigManager.log("✔ [网络阻断] 拦截 Jumper 热议广场 (/jump/subject/squareList)")
                                 return@newProxyInstance resp
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 伪造 /jump/subject/squareList 响应失败，回退原生请求", e)
@@ -804,7 +809,7 @@ object ViewCleanHooks {
                     }
                 }
             })
-            ConfigManager.log("✔ OkHttp 网络层动态拦截器已挂载")
+            ConfigManager.log("[Hook] OkHttp 网络层动态拦截器已挂载")
         } catch (e: Throwable) {
             ConfigManager.logError("✘ OkHttp 拦截器挂载异常", e)
         }

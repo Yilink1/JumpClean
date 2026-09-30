@@ -58,7 +58,7 @@ object SettingsEntryHooks {
                     }
                 }
             )
-            ConfigManager.log("✔ 已注册 Activity.onResume 设置页监听")
+            ConfigManager.log("[Hook] 已注册 Activity.onResume 监听")
         } catch (e: Throwable) {
             ConfigManager.logError("注册 Activity.onResume 监听失败", e)
         }
@@ -80,7 +80,7 @@ object SettingsEntryHooks {
                     }
                 }
             )
-            ConfigManager.log("✔ 已注册 Activity.onWindowFocusChanged 设置页监听")
+            ConfigManager.log("[Hook] 已注册 onWindowFocusChanged 监听")
         } catch (e: Throwable) {
             ConfigManager.logError("注册 Activity.onWindowFocusChanged 监听失败", e)
         }
@@ -95,7 +95,6 @@ object SettingsEntryHooks {
                         val activity = rv.context as? Activity ?: return
                         if (isTargetSettingActivity(activity)) {
                             val adapter = param.args.getOrNull(0) ?: return
-                            ConfigManager.log("RecyclerView.setAdapter 触发: ${activity.javaClass.simpleName}, adapter=${adapter.javaClass.name}")
                             hookAdapterBindForSettingsEntry(adapter.javaClass)
                             rv.post {
                                 scheduleInjection(activity, "setAdapter")
@@ -103,7 +102,7 @@ object SettingsEntryHooks {
                         }
                     }
                 })
-                ConfigManager.log("✔ 已注册 RecyclerView.setAdapter 监听")
+                ConfigManager.log("[Hook] 已注册 RecyclerView.setAdapter 监听")
             }
         } catch (e: Throwable) {
             ConfigManager.logError("注册 RecyclerView.setAdapter 监听失败", e)
@@ -171,14 +170,14 @@ object SettingsEntryHooks {
         // 优先方案 1：向 Adapter 数据列表插入原生 SettingItem
         val injectedData = injectSettingItemIntoAdapter(activity)
         if (injectedData) {
-            ConfigManager.log("✔ [$source] 已通过 Adapter 数据层成功插入 JumpClean 条目")
+            ConfigManager.log("[Hook] [$source] 已通过 Adapter 挂载 JumpClean 入口")
             return
         }
 
         // 兜底方案 2：直接在 RecyclerView 上方插入 1:1 原生风格条目 View
         val injectedView = injectSettingEntryView(activity)
         if (injectedView) {
-            ConfigManager.log("✔ [$source] 已通过 View 容器层成功插入 JumpClean 条目")
+            ConfigManager.log("[Hook] [$source] 已通过 View 容器挂载 JumpClean 入口")
         }
     }
 
@@ -350,7 +349,7 @@ object SettingsEntryHooks {
             }
             curClass = curClass.superclass
         }
-        ConfigManager.log("✔ 已为 ${adapterClass.name} 及其继承链挂载 $hookedBindCount 个 onBindViewHolder 监听")
+        ConfigManager.log("[Hook] 已为 ${adapterClass.name} 挂载设置入口 Bind 监听")
 
         // 2. 递归 Hook setOnItemClickListener（BRVAH 点击事件分发拦截）
         curClass = adapterClass
@@ -475,7 +474,7 @@ object SettingsEntryHooks {
             itemView.addView(arrowView)
 
             parent.addView(itemView, index)
-            ConfigManager.log("✔ 已在官方设置页成功注入 JumpClean 视图入口 (父容器: ${parent.javaClass.simpleName}, Index: $index)")
+            ConfigManager.log("[Hook] 官方设置页视图入口挂载成功 (父容器: ${parent.javaClass.simpleName}, Index: $index)")
             true
         } catch (e: Exception) {
             ConfigManager.logError("注入官方设置页视图入口失败", e)
@@ -507,7 +506,7 @@ object SettingsEntryHooks {
                     }
                 }
             )
-            ConfigManager.log("✔ 快捷入口（长按「我的」Tab）已安装")
+            ConfigManager.log("[Hook] 快捷入口（长按「我的」Tab）已安装")
         } catch (e: Exception) {
             ConfigManager.logError("✘ 快捷入口 Hook 失败", e)
         }
