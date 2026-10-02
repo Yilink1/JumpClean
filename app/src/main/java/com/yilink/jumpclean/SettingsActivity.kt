@@ -93,7 +93,7 @@ class SettingsActivity : Activity() {
                 textSize = 28f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(primaryText)
-                includeFontPadding = false
+                setPadding(0, 0, dp(6), 0)
             })
 
             val badgeBg = if (isDark) Color.parseColor("#222224") else Color.parseColor("#ECEEF2")
