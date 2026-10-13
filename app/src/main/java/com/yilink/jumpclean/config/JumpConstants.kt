@@ -26,6 +26,7 @@ object JumpConstants {
     const val KEY_HIDE_POST_AD = "hide_post_ad"
     const val KEY_HIDE_DISCOVER_TOP_AD = "hide_discover_top_ad"
     const val KEY_HIDE_DISCOVER_BANNER = "hide_discover_banner"
+    const val KEY_HIDE_DISCOVER_MODULES = "hide_discover_modules"
     const val KEY_HIDE_PHOTO_WALL = "hide_photo_wall"
     const val KEY_HIDE_MEMBER_CARD = "hide_member_card"
     const val KEY_HIDE_MY_ORDER = "hide_my_order"
@@ -49,9 +50,18 @@ object JumpConstants {
     // 弹窗与小酱
     const val KEY_HIDE_VOUCHER_POPUP = "hide_voucher_popup"
     const val KEY_BLOCK_NOTIFICATION_AD = "block_notification_ad"
+    const val KEY_EYE_SOFT_BLACK = "eye_soft_black"
+    const val KEY_EYE_SOFT_WHITE = "eye_soft_white"
+    const val KEY_EYE_BLACK_LEVEL = "eye_black_level"
     const val KEY_EXP_BLOCK_OFFICIAL_PROMO_POST = "exp_block_official_promo_post"
     const val KEY_BLOCKED_OFFICIAL_PROMO_COUNT = "blocked_official_promo_count"
     const val KEY_SHOW_BEAR_TERMINAL = "show_bear_terminal"
+    const val KEY_ENABLE_LIQUID_GLASS_NAV = "enable_liquid_glass_nav"
+    const val KEY_LIQUID_GLASS_TINT_ALPHA = "liquid_glass_tint_alpha"
+    const val KEY_LIQUID_GLASS_REFRACTION = "liquid_glass_refraction"
+    const val KEY_LIQUID_GLASS_BEVEL = "liquid_glass_bevel"
+    const val KEY_LIQUID_GLASS_DISPERSION = "liquid_glass_dispersion"
+    const val KEY_LIQUID_GLASS_SENSOR = "liquid_glass_sensor"
 
     // 关键词屏蔽
     const val KEY_ENABLE_KEYWORD_BLOCK = "enable_keyword_block"

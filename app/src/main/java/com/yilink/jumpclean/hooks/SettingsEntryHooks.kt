@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.os.SystemClock
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -482,6 +483,48 @@ object SettingsEntryHooks {
         }
     }
 
+    private const val TAG_SETTINGS_LP = -0x7f001020
+
+    /**
+     * 长按「我的」页里的「设置」按钮 → 直接打开液态玻璃「实时调参」面板（作用于真实底栏）。
+     * 页面是 Fragment 懒创建的，所以不在 onCreate 里找，而是布局变化时（节流 600ms）扫一遍；
+     * 这个按钮只存在于「我的」页，所以其它 Tab 上直接跳过，不做整棵 View 树遍历。
+     */
+    private fun installSettingsButtonLongPress(activity: Activity, id: Int) {
+        val decor = activity.window?.decorView ?: return
+        val myTabId = HookUtils.getCachedResId(activity, "myTab")
+        var last = 0L
+        decor.viewTreeObserver.addOnGlobalLayoutListener {
+            val now = SystemClock.uptimeMillis()
+            if (now - last < 600L) return@addOnGlobalLayoutListener
+            last = now
+            try {
+                if (myTabId != 0) {
+                    val my = activity.findViewById<View>(myTabId) as? android.widget.CompoundButton
+                    if (my != null && !my.isChecked) return@addOnGlobalLayoutListener
+                }
+                fun visit(v: View, depth: Int) {
+                    if (depth > 18) return
+                    // id 可能被其它页面复用成别的文字（如「私信」），所以必须同时匹配文字
+                    if (v.id == id && v is TextView && v.getTag(TAG_SETTINGS_LP) == null &&
+                        v.text?.toString()?.trim() == "设置"
+                    ) {
+                        v.setTag(TAG_SETTINGS_LP, true)
+                        v.setOnLongClickListener {
+                            // 玻璃底栏开着 → 实时调参；没开（找不到真实底栏）→ 自动退回内置预览版
+                            com.yilink.jumpclean.ui.LiquidGlassSettingsDialog.show(activity, true, null) {
+                                try { LiquidGlassHooks.refreshFromSettings() } catch (_: Throwable) {}
+                            }
+                            true
+                        }
+                    }
+                    if (v is ViewGroup) for (i in 0 until v.childCount) visit(v.getChildAt(i), depth + 1)
+                }
+                visit(decor, 0)
+            } catch (_: Throwable) {}
+        }
+    }
+
     /**
      * 快捷入口：长按首页底栏「我的」Tab 直接弹出设置
      */
@@ -499,6 +542,11 @@ object SettingsEntryHooks {
                                     SettingsDialog.show(activity)
                                     true
                                 }
+                            }
+                            // 玻璃底栏下宿主 Tab 收不到长按（玻璃条也不做长按，免得误触水滴）：
+                            // 改为长按「我的」页里文字为「设置」的按钮（宿主 id: tvChat）
+                            HookUtils.getCachedResId(activity, "tvChat").takeIf { it != 0 }?.let { id ->
+                                installSettingsButtonLongPress(activity, id)
                             }
                         } catch (e: Exception) {
                             ConfigManager.logError("设置入口注入异常", e)

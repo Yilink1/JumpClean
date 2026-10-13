@@ -89,6 +89,11 @@ object SettingsDialog {
             SectionHeader("发现页"),
             SettingItem(JumpConstants.KEY_HIDE_DISCOVER_TOP_AD, "屏蔽顶部广告"),
             SettingItem(JumpConstants.KEY_HIDE_DISCOVER_BANNER, "屏蔽轮播广告"),
+            SettingItem(
+                JumpConstants.KEY_HIDE_DISCOVER_MODULES,
+                "精简商业推广模块",
+                desc = "折叠新版「大家都在买」、低于40元等整块带货大卡片"
+            ),
 
             SectionHeader("游戏折扣页"),
             SettingItem(JumpConstants.KEY_HIDE_GAME_MEMBER_GUIDE, "屏蔽会员广告"),
@@ -120,14 +125,53 @@ object SettingsDialog {
             SettingItem(JumpConstants.KEY_HIDE_WIDGET_VIP_TAG, "隐藏小组件会员标识"),
 
             SectionHeader("底栏"),
+            SettingItem(
+                JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV,
+                "底栏液态玻璃 (实验性)",
+                desc = "通栏物理折射 / 重力传感器高光玻璃底栏"
+            ),
+            ActionItem("液态玻璃参数微调", desc = "内置预览，点「保存并生效」后应用；想直接在真实底栏上实时调：长按「我的」页的「设置」按钮") {
+                LiquidGlassSettingsDialog.show(activity, false, null) {
+                    try {
+                        com.yilink.jumpclean.hooks.LiquidGlassHooks.refreshFromSettings()
+                    } catch (_: Throwable) {}
+                }
+            },
             SettingItem(JumpConstants.KEY_HIDE_WEB_TAB, "隐藏「Jump 赏」"),
             SettingItem(JumpConstants.KEY_HIDE_LOTTERY_TAB, "隐藏「抽奖 / 全新 App」"),
+
+            SectionHeader("夜间护眼"),
+            SettingItem(
+                JumpConstants.KEY_EYE_SOFT_BLACK,
+                "柔化纯黑背景",
+                desc = "夜间模式下把 #000000 底色换成深灰；修改后需重启 App"
+            ),
+            SettingItem(
+                JumpConstants.KEY_EYE_SOFT_WHITE,
+                "柔化纯白文字",
+                desc = "夜间模式下把 #FFFFFF 文字压成柔白，减轻黑底白字的刺眼感；需重启 App"
+            ),
+            ActionItem("夜间底色深浅", desc = "在 #121212 ~ #2C2C31 之间选一档") {
+                val cur = prefs.getInt(JumpConstants.KEY_EYE_BLACK_LEVEL, com.yilink.jumpclean.hooks.EyeCareHooks.DEFAULT_LEVEL)
+                android.app.AlertDialog.Builder(activity)
+                    .setTitle("夜间底色")
+                    .setSingleChoiceItems(com.yilink.jumpclean.hooks.EyeCareHooks.BLACK_LEVEL_NAMES, cur) { d, which ->
+                        prefs.edit().putInt(JumpConstants.KEY_EYE_BLACK_LEVEL, which).apply()
+                        Toast.makeText(activity, "已保存，重启 App 后生效", Toast.LENGTH_SHORT).show()
+                        d.dismiss()
+                    }
+                    .show()
+            },
 
             SectionHeader("个性化与扩展"),
             ActionItem("更换 App 图标") {
                 IconPickerDialog.show(activity)
             },
-            SettingItem(JumpConstants.KEY_ENABLE_DEBUG_LOG, "开启调试日志"),
+            SettingItem(
+                JumpConstants.KEY_ENABLE_DEBUG_LOG,
+                "开启调试日志",
+                desc = "总开关：记录模块运行日志。玻璃的帧率/底栏追踪另有开关（玻璃面板 → 开发者 → 玻璃诊断日志），需两者同时开"
+            ),
             ActionItem("查看诊断日志", desc = "查看近期 200 行运行日志") {
                 LogDialog.show(activity)
             },
@@ -366,6 +410,10 @@ object SettingsDialog {
                         setOnCheckedChangeListener { _, checked ->
                             prefs.edit().putBoolean(entry.key, checked).apply()
                             ViewCleanHooks.applyAllUIVisibility(activity)
+                            // 本对话框盖在 MainActivity 上，MainActivity 不会 onResume，所以玻璃开关要主动触发一次应用
+                            if (entry.key == JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV) {
+                                try { com.yilink.jumpclean.hooks.LiquidGlassHooks.refreshFromSettings() } catch (_: Throwable) {}
+                            }
                             if (entry.key in restartRequiredKeys) {
                                 showRestartPrompt(activity, isDark, dp)
                             }
@@ -415,6 +463,10 @@ object SettingsDialog {
                         setOnCheckedChangeListener { _, checked ->
                             prefs.edit().putBoolean(entry.key, checked).apply()
                             ViewCleanHooks.applyAllUIVisibility(activity)
+                            // 本对话框盖在 MainActivity 上，MainActivity 不会 onResume，所以玻璃开关要主动触发一次应用
+                            if (entry.key == JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV) {
+                                try { com.yilink.jumpclean.hooks.LiquidGlassHooks.refreshFromSettings() } catch (_: Throwable) {}
+                            }
                             if (entry.key in restartRequiredKeys) {
                                 showRestartPrompt(activity, isDark, dp)
                             }
