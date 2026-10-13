@@ -45,6 +45,13 @@ object ViewCleanHooks {
                         val id = view.id
                         if (id <= 0) return
 
+                        // 开发者「底栏变动追踪」：谁在显隐 Jump 赏 / 抽奖 / 红点，打印宿主侧调用栈
+                        if ((id == cachedRedDotId || id == cachedLotteryTabId || id == cachedWebTabId) &&
+                            GlassStyle.devTrace()
+                        ) {
+                            LiquidGlassHooks.traceTabChange(view, "setVisibility=" + param.args[0])
+                        }
+
                         if (cachedRedDotId != 0 && id == cachedRedDotId) {
                             if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_LOTTERY_TAB)) {
                                 param.args[0] = View.GONE
@@ -160,6 +167,8 @@ object ViewCleanHooks {
                 "tvMyOrderToolbar" to JumpConstants.KEY_HIDE_MY_ORDER,
                 "rvOPT" to JumpConstants.KEY_HIDE_DISCOVER_TOP_AD,
                 "adBanner" to JumpConstants.KEY_HIDE_DISCOVER_BANNER,
+                "llDiscoverModules" to JumpConstants.KEY_HIDE_DISCOVER_MODULES,
+                "moduleEveryoneBuying" to JumpConstants.KEY_HIDE_DISCOVER_MODULES,
                 "ivTag" to JumpConstants.KEY_HIDE_WIDGET_VIP_TAG
             )
 
@@ -184,7 +193,8 @@ object ViewCleanHooks {
 
             // 精准消除发现页探索栏顶部的 46px (12.27dp) 顽固白缝
             if (ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_DISCOVER_BANNER) ||
-                ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_DISCOVER_TOP_AD)
+                ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_DISCOVER_TOP_AD) ||
+                ConfigManager.isFeatureEnabled(activity, JumpConstants.KEY_HIDE_DISCOVER_MODULES)
             ) {
                 val collapsingId = HookUtils.getCachedResId(activity, "collapsing_toolbar")
                 if (collapsingId != 0) {
