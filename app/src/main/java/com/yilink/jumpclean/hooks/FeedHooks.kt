@@ -35,17 +35,14 @@ object FeedHooks {
     // 内存极速布局资源名称缓存（O(1) 替代跨 JNI 的 getResourceEntryName）
     private val layoutNameCache = ConcurrentHashMap<Int, String>()
 
+    private val adapterDataPass = AdapterDataPass()
+    private const val DATA_PASS_ENTERED = "jumpclean_data_pass_entered"
+
     // onBindViewHolder 防重（防子类/父类双重 Hook 导致的每项多次执行）
     @Volatile
     private var lastBindHolderHash = 0
     @Volatile
     private var lastBindTime = 0L
-
-    // 列表清洗防重（同一次刷新触发的多次内部 setModels/addModels 仅清洗一次）
-    @Volatile
-    private var lastFilteredListHash = 0
-    @Volatile
-    private var lastFilteredListTime = 0L
 
     // 记录已经挂载 Hook 的 Adapter 类名，避免重复 Hook
     private val hookedAdapterClasses = Collections.synchronizedSet(HashSet<String>())
@@ -288,15 +285,19 @@ object FeedHooks {
                 val isPromoEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
                 val isKeywordEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_ENABLE_KEYWORD_BLOCK)
                 val isRestoreEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_RESTORE_POST_YEAR)
+                if (!isPromoEnabled && !isKeywordEnabled && !isRestoreEnabled) return
+                val scope = adapterDataPass.enter(param.thisObject)
+                param.setObjectExtra(DATA_PASS_ENTERED, true)
 
                 for (i in args.indices) {
                     val arg = args[i] ?: continue
                     if (arg is Collection<*>) {
+                        if (!scope.shouldProcess(arg)) continue
                         if (isRestoreEnabled) {
                             FeatureHooks.cacheDatesFromRawCollection(arg)
                         }
 
-                        // 数据入口快速清洗（纯内存 List 过滤，微秒级执行，不卡绘制）
+                        // 同一嵌套调用中，未变化的数据只做一次反射和关键词扫描。
                         if (isPromoEnabled || isKeywordEnabled) {
                             try {
                                 if (arg is MutableList<*>) {
@@ -309,9 +310,19 @@ object FeedHooks {
                                 }
                             } catch (e: Exception) {
                                 ConfigManager.logError("Adapter 数据源拦截过滤异常", e)
+                                continue // 失败时不缓存结果，允许下一入口重试。
                             }
                         }
+                        val filtered = param.args[i] as? Collection<*> ?: continue
+                        scope.remember(filtered)
                     }
+                }
+            }
+
+            override fun afterHookedMethod(param: MethodHookParam) {
+                // 宿主方法正常返回或抛异常都会进入 after，最外层退出即释放本轮快照。
+                if (param.getObjectExtra(DATA_PASS_ENTERED) == true) {
+                    adapterDataPass.leave(param.thisObject)
                 }
             }
         }
@@ -508,14 +519,7 @@ object FeedHooks {
         if (list.isEmpty()) return false
         if (!isPromoEnabled && !isKeywordEnabled) return false
 
-        // 1. 列表实例清洗防重：同一批数据在 300ms 内避免被多个内部调用重复扫描
-        val listHash = System.identityHashCode(list)
-        val now = SystemClock.uptimeMillis()
-        if (listHash == lastFilteredListHash && (now - lastFilteredListTime) < 300) {
-            return false
-        }
-        lastFilteredListHash = listHash
-        lastFilteredListTime = now
+        // 嵌套入口的防重由 AdapterDataPass 管理；独立更新不按时间跳过。
 
         val app = ConfigManager.getValidAppContext()
         val keywordScope = app?.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
@@ -592,61 +596,21 @@ object FeedHooks {
         }
     }
 
-    private class PromoClassMeta(
-        val adTypeField: Field?,
-        val adIdField: Field?,
-        val customNicknameField: Field?,
-        val userNameStrField: Field?,
-        val materialField: Field?,
-        val isDefinitelyNotPromo: Boolean
-    )
+    private class PromoClassMeta(val adTypeField: Field?)
 
     private val promoClassMetaMap = ConcurrentHashMap<Class<*>, PromoClassMeta>()
 
     private fun getPromoClassMeta(clazz: Class<*>): PromoClassMeta {
         return promoClassMetaMap.getOrPut(clazz) {
-            val name = clazz.name.lowercase()
-            if (name.contains("evaluation") || name.contains("subject")) {
-                PromoClassMeta(null, null, null, null, null, true)
-            } else {
-                val adType = HookUtils.findFieldRecursively(clazz, "adType")
-                val adId = HookUtils.findFieldRecursively(clazz, "adId")
-                val nick = HookUtils.findFieldRecursively(clazz, "customNickname")
-                val user = HookUtils.findFieldRecursively(clazz, "userNameStr")
-                val material = HookUtils.findFieldRecursively(clazz, "material")
-                val notPromo = (adType == null && adId == null && nick == null && user == null && material == null)
-                PromoClassMeta(adType, adId, nick, user, material, notPromo)
-            }
+            PromoClassMeta(HookUtils.findFieldRecursively(clazz, "adType"))
         }
     }
 
     private fun isOfficialPromoModel(model: Any): Boolean {
         return try {
             val meta = getPromoClassMeta(model.javaClass)
-            if (meta.isDefinitelyNotPromo) return false
-
-            val adType = meta.adTypeField?.get(model)
-            val adId = meta.adIdField?.get(model)
-            if (adType != null || adId != null) {
-                return true
-            }
-
-            var nickname = meta.customNicknameField?.get(model)?.toString()
-                ?: meta.userNameStrField?.get(model)?.toString()
-                ?: HookUtils.safeCallStringGetter(model, "getCustomNickname")
-                ?: HookUtils.safeCallStringGetter(model, "getUserNameStr")
-                ?: ""
-
-            if (nickname.isEmpty() && meta.materialField != null) {
-                val material = meta.materialField.get(model)
-                if (material != null) {
-                    nickname = HookUtils.safeGetObjectField(material, "customNickname")?.toString()
-                        ?: HookUtils.safeCallStringGetter(material, "getCustomNickname")
-                        ?: ""
-                }
-            }
-
-            nickname.contains("小酱") || nickname.contains("Jump官方")
+            // 昵称和 adId 不能证明是推广贴；只使用已确认的类型。
+            PromoRules.isOfficialPromoType(meta.adTypeField?.get(model))
         } catch (_: Throwable) {
             false
         }

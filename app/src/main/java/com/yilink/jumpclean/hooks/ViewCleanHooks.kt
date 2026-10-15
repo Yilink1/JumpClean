@@ -680,7 +680,6 @@ object ViewCleanHooks {
                             val originalResponse = proceedSafe(proceedMethod, chain, request)
                             try {
                                 val cleaned = cleanRecommendAdConfResponse(lpparam.classLoader, originalResponse, blockPromo, blockHot, blockAd)
-                                ConfigManager.log("✔ [网络清洗] 真实过滤推荐流广告 (小酱=$blockPromo, 热议=$blockHot, 广告=$blockAd)")
                                 return@newProxyInstance cleaned
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 清洗 /jump/recommend/ad_conf 异常", e)
@@ -780,16 +779,34 @@ object ViewCleanHooks {
         }
     }
 
-    private fun cleanPriceResponse(classLoader: ClassLoader, response: Any): Any {
+    /** 读取独立快照：清洗或反射重建失败时，调用方仍能返回未消费的原响应。 */
+    private fun cleanJsonResponse(classLoader: ClassLoader, response: Any, transform: (String) -> String): Any {
         val body = XposedHelpers.callMethod(response, "body") ?: return response
-        val bodyString = XposedHelpers.callMethod(body, "string") as? String ?: return response
-
-        val cleanJson = cleanPriceListJson(bodyString)
+        // 配置响应应很小；超限时保留原响应，避免无限缓存响应体。
+        val maxBytes = 4L * 1024 * 1024
+        val snapshot = XposedHelpers.callMethod(response, "peekBody", maxBytes + 1)
+        val bodyString = try {
+            val size = XposedHelpers.callMethod(snapshot, "contentLength") as? Long ?: return response
+            if (size > maxBytes) return response
+            XposedHelpers.callMethod(snapshot, "string") as? String ?: return response
+        } finally {
+            XposedHelpers.callMethod(snapshot, "close")
+        }
+        val cleanJson = transform(bodyString)
+        if (cleanJson == bodyString) return response
         val mediaType = XposedHelpers.callMethod(body, "contentType")
         val newBody = createResponseBody(classLoader, mediaType, cleanJson)
         val newBuilder = XposedHelpers.callMethod(response, "newBuilder")
         XposedHelpers.callMethod(newBuilder, "body", newBody)
-        return XposedHelpers.callMethod(newBuilder, "build")
+        XposedHelpers.callMethod(newBuilder, "removeHeader", "Content-Length")
+        val cleaned = XposedHelpers.callMethod(newBuilder, "build")
+        // 只在替换响应构造成功后释放原始 body，失败路径保留原 body 可读。
+        try { XposedHelpers.callMethod(body, "close") } catch (_: Throwable) {}
+        return cleaned
+    }
+
+    private fun cleanPriceResponse(classLoader: ClassLoader, response: Any): Any {
+        return cleanJsonResponse(classLoader, response, ::cleanPriceListJson)
     }
 
     private fun cleanPriceListJson(jsonStr: String): String {
@@ -821,15 +838,7 @@ object ViewCleanHooks {
     }
 
     private fun cleanGameExtResponse(classLoader: ClassLoader, response: Any): Any {
-        val body = XposedHelpers.callMethod(response, "body") ?: return response
-        val bodyString = XposedHelpers.callMethod(body, "string") as? String ?: return response
-
-        val cleanJson = cleanGameExtJson(bodyString)
-        val mediaType = XposedHelpers.callMethod(body, "contentType")
-        val newBody = createResponseBody(classLoader, mediaType, cleanJson)
-        val newBuilder = XposedHelpers.callMethod(response, "newBuilder")
-        XposedHelpers.callMethod(newBuilder, "body", newBody)
-        return XposedHelpers.callMethod(newBuilder, "build")
+        return cleanJsonResponse(classLoader, response, ::cleanGameExtJson)
     }
 
     private fun cleanGameExtJson(jsonStr: String): String {
@@ -846,15 +855,9 @@ object ViewCleanHooks {
     }
 
     private fun cleanHomeInterestResponse(classLoader: ClassLoader, response: Any, hideBanner: Boolean, hideTopicList: Boolean): Any {
-        val body = XposedHelpers.callMethod(response, "body") ?: return response
-        val bodyString = XposedHelpers.callMethod(body, "string") as? String ?: return response
-
-        val cleanJson = cleanHomeInterestJson(bodyString, hideBanner, hideTopicList)
-        val mediaType = XposedHelpers.callMethod(body, "contentType")
-        val newBody = createResponseBody(classLoader, mediaType, cleanJson)
-        val newBuilder = XposedHelpers.callMethod(response, "newBuilder")
-        XposedHelpers.callMethod(newBuilder, "body", newBody)
-        return XposedHelpers.callMethod(newBuilder, "build")
+        return cleanJsonResponse(classLoader, response) {
+            cleanHomeInterestJson(it, hideBanner, hideTopicList)
+        }
     }
 
     private fun cleanHomeInterestJson(jsonStr: String, hideBanner: Boolean, hideTopicList: Boolean): String {
@@ -880,58 +883,78 @@ object ViewCleanHooks {
         blockHot: Boolean,
         blockAd: Boolean
     ): Any {
-        val body = XposedHelpers.callMethod(response, "body") ?: return response
-        val bodyString = XposedHelpers.callMethod(body, "string") as? String ?: return response
-
-        val cleanJson = cleanRecommendAdConfJson(bodyString, blockPromo, blockHot, blockAd)
-        val mediaType = XposedHelpers.callMethod(body, "contentType")
-        val newBody = createResponseBody(classLoader, mediaType, cleanJson)
-        val newBuilder = XposedHelpers.callMethod(response, "newBuilder")
-        XposedHelpers.callMethod(newBuilder, "body", newBody)
-        return XposedHelpers.callMethod(newBuilder, "build")
+        var blockedPromoCount = 0
+        val cleaned = cleanJsonResponse(classLoader, response) {
+            cleanRecommendAdConfJson(it, blockPromo, blockHot, blockAd) { count ->
+                blockedPromoCount = count
+            }
+        }
+        if (cleaned !== response) {
+            repeat(blockedPromoCount) { ConfigManager.recordOfficialPromoBlocked() }
+        }
+        return cleaned
     }
 
     private fun cleanRecommendAdConfJson(
         jsonStr: String,
         blockPromo: Boolean,
         blockHot: Boolean,
-        blockAd: Boolean
+        blockAd: Boolean,
+        onPromoBlocked: (Int) -> Unit
     ): String {
         try {
             val root = org.json.JSONObject(jsonStr)
             val data = root.optJSONArray("data") ?: return jsonStr
             val newData = org.json.JSONArray()
+            var modified = false
+            var blockedPromoCount = 0
 
             for (i in 0 until data.length()) {
-                val pageItem = data.optJSONObject(i) ?: continue
-                val ads = pageItem.optJSONArray("ads") ?: continue
+                val rawPage = data.get(i)
+                val pageItem = rawPage as? org.json.JSONObject
+                val ads = pageItem?.optJSONArray("ads")
+                if (pageItem == null || ads == null) {
+                    newData.put(rawPage)
+                    continue
+                }
                 val newAds = org.json.JSONArray()
 
                 for (j in 0 until ads.length()) {
-                    val ad = ads.optJSONObject(j) ?: continue
-                    val adType = ad.optInt("adType", -1)
+                    val rawAd = ads.get(j)
+                    val ad = rawAd as? org.json.JSONObject
+                    val adType = ad?.opt("adType")
 
                     // 1. 小酱推广贴 (adType == 8)
-                    if (blockPromo && adType == 8) {
-                        ConfigManager.recordOfficialPromoBlocked()
+                    if (blockPromo && PromoRules.isOfficialPromoType(adType)) {
+                        blockedPromoCount++
+                        modified = true
                         continue
                     }
 
                     // 2. Jumper热议 (adType == 106)
-                    if (blockHot && adType == 106) continue
+                    if (blockHot && (adType == 106 || adType == "106")) {
+                        modified = true
+                        continue
+                    }
 
-                    // 3. 商业推广卡片 (adType == 101 或除 8/106 外的其它广告)
-                    if (blockAd && (adType == 101 || (adType != 8 && adType != 106))) continue
+                    // 3. 只删除已识别的商业卡片；未知类型和结构原样保留。
+                    if (blockAd && (adType == 101 || adType == "101")) {
+                        modified = true
+                        continue
+                    }
 
-                    newAds.put(ad)
+                    newAds.put(rawAd)
                 }
 
                 pageItem.put("ads", newAds)
                 newData.put(pageItem)
             }
 
+            if (!modified) return jsonStr
             root.put("data", newData)
-            return root.toString()
+            val result = root.toString()
+            onPromoBlocked(blockedPromoCount)
+            return result
         } catch (_: Throwable) {
             return jsonStr
         }
