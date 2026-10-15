@@ -27,19 +27,10 @@ object FeedHooks {
     @Volatile
     private var brvBaseClass: Class<*>? = null
 
-    // 反射 Field 静态缓存
-    @Volatile
-    private var fieldAdType: Field? = null
-    @Volatile
-    private var fieldAdId: Field? = null
-    @Volatile
-    private var fieldCustomNickname: Field? = null
-    @Volatile
-    private var fieldUserNameStr: Field? = null
     @Volatile
     private var cachedModelsField: Field? = null
     @Volatile
-    private var fieldsResolved = false
+    var currentRecommendAdapterRef: java.lang.ref.WeakReference<Any>? = null
 
     // 内存极速布局资源名称缓存（O(1) 替代跨 JNI 的 getResourceEntryName）
     private val layoutNameCache = ConcurrentHashMap<Int, String>()
@@ -244,6 +235,8 @@ object FeedHooks {
                         ensureAdapterClassHooked(cls, lpparam)
                     }
 
+                    currentRecommendAdapterRef = java.lang.ref.WeakReference(adapter)
+
                     // 检查已挂载数据（防止在 setAdapter 之前就已注入旧数据）
                     val isPromoEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
                     val isKeywordEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_ENABLE_KEYWORD_BLOCK)
@@ -303,6 +296,7 @@ object FeedHooks {
                             FeatureHooks.cacheDatesFromRawCollection(arg)
                         }
 
+                        // 数据入口快速清洗（纯内存 List 过滤，微秒级执行，不卡绘制）
                         if (isPromoEnabled || isKeywordEnabled) {
                             try {
                                 if (arg is MutableList<*>) {
@@ -375,18 +369,7 @@ object FeedHooks {
                         return
                     }
 
-                    // 3. 会员卡片买会员按钮条目拦截 (tvBuy)
-                    val buyBtnId = HookUtils.getCachedResId(context, "tvBuy")
-                    if (buyBtnId != 0 && itemView.findViewById<View>(buyBtnId) != null) {
-                        if (isMemberCardEnabled) {
-                            HookUtils.collapseView(itemView)
-                            return
-                        } else if (HookUtils.isCollapsed(itemView)) {
-                            HookUtils.restoreView(itemView)
-                        }
-                    }
-
-                    // 4. 获取条目布局名称（走 O(1) 内存缓存，彻底杜绝高频 JNI getResourceEntryName 调用）
+                    // 3. 获取条目布局名称（走 O(1) 内存缓存，彻底杜绝高频 JNI getResourceEntryName 调用）
                     val itemViewType = try {
                         XposedHelpers.callMethod(holder, "getItemViewType") as? Int
                     } catch (_: Exception) {
@@ -396,9 +379,19 @@ object FeedHooks {
                         getCachedLayoutName(context, itemViewType)
                     } else ""
 
+                    // 4. 会员卡片买会员按钮条目拦截 (tvBuy)：仅当布局可能属于会员组件或未知时才探查，杜绝常规帖子树盲目遍历
+                    if (isMemberCardEnabled && (resName.isEmpty() || resName.contains("member") || resName.contains("vip"))) {
+                        val buyBtnId = HookUtils.getCachedResId(context, "tvBuy")
+                        if (buyBtnId != 0 && itemView.findViewById<View>(buyBtnId) != null) {
+                            HookUtils.collapseView(itemView)
+                            return
+                        } else if (HookUtils.isCollapsed(itemView)) {
+                            HookUtils.restoreView(itemView)
+                        }
+                    }
+
                     // 5. 首页轮播图 (banner)
-                    // 核心限制：仅在顶部 Header 布局（包含 header 或 general_interest）中折叠轮播组件，
-                    // 严禁在信息流条目中盲目折叠，避免误杀好友动态、好友玩过等卡片中的游戏图片
+                    // 核心限制：仅在顶部 Header 布局中折叠轮播组件，避免误杀正常内容卡片
                     val isHeaderLayout = resName.contains("header") || resName.contains("general_interest")
                     if (isHeaderLayout) {
                         val bannerId = HookUtils.getCachedResId(context, "banner")
@@ -416,13 +409,17 @@ object FeedHooks {
                         }
                     }
 
-                    // 6. Jumper 热议（精准匹配首页热议列表布局及指示器）
+                    // 6. Jumper 热议：精准通过布局名称匹配，彻底去除对常规帖子树的盲目 findViewById 递归遍历
                     val allTopicId = HookUtils.getCachedResId(context, "flAllTopic")
                     val indicatorId = HookUtils.getCachedResId(context, "clIndicator")
-                    val isHotDiscussItem = (resName.isNotEmpty() && (resName in JumpConstants.HOT_DISCUSS_LAYOUT_NAMES ||
-                            resName.contains("hot_discuss"))) ||
-                            (allTopicId != 0 && itemView.findViewById<View>(allTopicId) != null) ||
-                            (indicatorId != 0 && itemView.findViewById<View>(indicatorId) != null)
+                    val isHotDiscussItem = (resName.isNotEmpty() && (
+                        resName in JumpConstants.HOT_DISCUSS_LAYOUT_NAMES ||
+                        resName.contains("hot_discuss") ||
+                        resName.contains("subject_square")
+                    )) || ((resName.isEmpty() || resName.contains("topic")) && (
+                        (allTopicId != 0 && itemView.findViewById<View>(allTopicId) != null) ||
+                        (indicatorId != 0 && itemView.findViewById<View>(indicatorId) != null)
+                    ))
 
                     if (isHotDiscussItem) {
                         if (isHotDiscussEnabled) {
@@ -433,7 +430,7 @@ object FeedHooks {
                         }
                     }
 
-                    // 7. 帖子广告
+                    // 7. 帖子广告：纯布局名称黑名单快速匹配，零 View 树遍历开销
                     if (resName.isNotEmpty() && (resName in JumpConstants.POST_AD_LAYOUT_NAMES || resName.contains("ad_sdk") || resName.contains("ad_lottery"))) {
                         if (isPostAdEnabled) {
                             HookUtils.collapseView(itemView)
@@ -461,8 +458,16 @@ object FeedHooks {
         ConfigManager.log("[Hook] $desc")
     }
 
+    fun cleanCurrentAdapter() {
+        val adapter = currentRecommendAdapterRef?.get() ?: return
+        val cl = adapter.javaClass.classLoader
+        val isPromoEnabled = ConfigManager.isFeatureEnabledSafe(cl, JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
+        val isKeywordEnabled = ConfigManager.isFeatureEnabledSafe(cl, JumpConstants.KEY_ENABLE_KEYWORD_BLOCK)
+        scanAndFilterAdapterModels(adapter, isPromoEnabled, isKeywordEnabled)
+    }
+
     /**
-     * 当 Adapter 挂载时，扫描其实例字段中的 models 列表并执行一次清洗
+     * 当 Adapter 挂载或设置发生变更时，扫描其实例字段中的 models 列表并执行一次清洗
      */
     private fun scanAndFilterAdapterModels(adapter: Any, isPromoEnabled: Boolean, isKeywordEnabled: Boolean) {
         if (!isPromoEnabled && !isKeywordEnabled) return
@@ -501,6 +506,7 @@ object FeedHooks {
 
     private fun filterPromoList(list: MutableList<*>, isPromoEnabled: Boolean, isKeywordEnabled: Boolean): Boolean {
         if (list.isEmpty()) return false
+        if (!isPromoEnabled && !isKeywordEnabled) return false
 
         // 1. 列表实例清洗防重：同一批数据在 300ms 内避免被多个内部调用重复扫描
         val listHash = System.identityHashCode(list)
@@ -526,7 +532,7 @@ object FeedHooks {
         while (iterator.hasNext()) {
             val item = iterator.next() ?: continue
 
-            // 1. 小酱推广贴：锁定仅在推荐流剔除
+            // 1. 小酱推广贴：锁定仅在推荐流剔除 (网络层为主，此处高效数据层剔除并自增计数器)
             if (isPromoEnabled && isFromRecommendStream && isOfficialPromoModel(item)) {
                 iterator.remove()
                 modified = true
@@ -586,35 +592,61 @@ object FeedHooks {
         }
     }
 
+    private class PromoClassMeta(
+        val adTypeField: Field?,
+        val adIdField: Field?,
+        val customNicknameField: Field?,
+        val userNameStrField: Field?,
+        val materialField: Field?,
+        val isDefinitelyNotPromo: Boolean
+    )
+
+    private val promoClassMetaMap = ConcurrentHashMap<Class<*>, PromoClassMeta>()
+
+    private fun getPromoClassMeta(clazz: Class<*>): PromoClassMeta {
+        return promoClassMetaMap.getOrPut(clazz) {
+            val name = clazz.name.lowercase()
+            if (name.contains("evaluation") || name.contains("subject")) {
+                PromoClassMeta(null, null, null, null, null, true)
+            } else {
+                val adType = HookUtils.findFieldRecursively(clazz, "adType")
+                val adId = HookUtils.findFieldRecursively(clazz, "adId")
+                val nick = HookUtils.findFieldRecursively(clazz, "customNickname")
+                val user = HookUtils.findFieldRecursively(clazz, "userNameStr")
+                val material = HookUtils.findFieldRecursively(clazz, "material")
+                val notPromo = (adType == null && adId == null && nick == null && user == null && material == null)
+                PromoClassMeta(adType, adId, nick, user, material, notPromo)
+            }
+        }
+    }
+
     private fun isOfficialPromoModel(model: Any): Boolean {
         return try {
-            val clazz = model.javaClass
+            val meta = getPromoClassMeta(model.javaClass)
+            if (meta.isDefinitelyNotPromo) return false
 
-            if (!fieldsResolved) {
-                fieldAdType = HookUtils.findFieldRecursively(clazz, "adType")
-                fieldAdId = HookUtils.findFieldRecursively(clazz, "adId")
-                fieldCustomNickname = HookUtils.findFieldRecursively(clazz, "customNickname")
-                fieldUserNameStr = HookUtils.findFieldRecursively(clazz, "userNameStr")
-                fieldsResolved = true
-            }
-
-            val adType = fieldAdType?.get(model)
-            val adId = fieldAdId?.get(model)
+            val adType = meta.adTypeField?.get(model)
+            val adId = meta.adIdField?.get(model)
             if (adType != null || adId != null) {
                 return true
             }
 
-            val nickname = HookUtils.safeCallStringGetter(model, "getCustomNickname")
+            var nickname = meta.customNicknameField?.get(model)?.toString()
+                ?: meta.userNameStrField?.get(model)?.toString()
+                ?: HookUtils.safeCallStringGetter(model, "getCustomNickname")
                 ?: HookUtils.safeCallStringGetter(model, "getUserNameStr")
-                ?: fieldCustomNickname?.get(model)?.toString()
-                ?: fieldUserNameStr?.get(model)?.toString()
                 ?: ""
 
-            if (nickname.contains("小酱") || nickname.contains("Jump官方")) {
-                return true
+            if (nickname.isEmpty() && meta.materialField != null) {
+                val material = meta.materialField.get(model)
+                if (material != null) {
+                    nickname = HookUtils.safeGetObjectField(material, "customNickname")?.toString()
+                        ?: HookUtils.safeCallStringGetter(material, "getCustomNickname")
+                        ?: ""
+                }
             }
 
-            false
+            nickname.contains("小酱") || nickname.contains("Jump官方")
         } catch (_: Throwable) {
             false
         }

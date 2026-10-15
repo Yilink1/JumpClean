@@ -233,14 +233,16 @@ object ViewCleanHooks {
     }
 
     private fun applyTargetViewsVisibility(view: View, targetIds: Set<Int>, restoreIds: Set<Int>) {
-        if (targetIds.contains(view.id)) {
-            HookUtils.collapseView(view)
-        } else if (restoreIds.contains(view.id) && HookUtils.isCollapsed(view)) {
-            HookUtils.restoreView(view)
+        for (id in targetIds) {
+            val targetView = view.findViewById<View>(id) ?: continue
+            if (!HookUtils.isCollapsed(targetView)) {
+                HookUtils.collapseView(targetView)
+            }
         }
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                applyTargetViewsVisibility(view.getChildAt(i), targetIds, restoreIds)
+        for (id in restoreIds) {
+            val targetView = view.findViewById<View>(id) ?: continue
+            if (HookUtils.isCollapsed(targetView)) {
+                HookUtils.restoreView(targetView)
             }
         }
     }
@@ -668,6 +670,25 @@ object ViewCleanHooks {
                         }
                     }
 
+                    // 5.5 推荐流广告总控网络清洗：/jump/recommend/ad_conf (包含小酱推广贴 adType=8、Jumper热议 adType=106、推荐流商业卡片 adType=101)
+                    if (urlStr.contains("/jump/recommend/ad_conf")) {
+                        val blockPromo = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
+                        val blockHot = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_HOT_DISCUSS)
+                        val blockAd = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_POST_AD)
+
+                        if (blockPromo || blockHot || blockAd) {
+                            val originalResponse = proceedSafe(proceedMethod, chain, request)
+                            try {
+                                val cleaned = cleanRecommendAdConfResponse(lpparam.classLoader, originalResponse, blockPromo, blockHot, blockAd)
+                                ConfigManager.log("✔ [网络清洗] 真实过滤推荐流广告 (小酱=$blockPromo, 热议=$blockHot, 广告=$blockAd)")
+                                return@newProxyInstance cleaned
+                            } catch (e: Throwable) {
+                                ConfigManager.logError("✘ 清洗 /jump/recommend/ad_conf 异常", e)
+                                return@newProxyInstance originalResponse
+                            }
+                        }
+                    }
+
                     // 6. 首页顶部枢纽数据清洗：/jump/interest_v2/home (按需清空轮播广告 bannerList 和顶部话题栏 promotionList)
                     if (urlStr.contains("/jump/interest_v2/home")) {
                         val hideBanner = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_BANNER)
@@ -846,6 +867,70 @@ object ViewCleanHooks {
             if (hideTopicList) {
                 data.put("promotionList", org.json.JSONArray())
             }
+            return root.toString()
+        } catch (_: Throwable) {
+            return jsonStr
+        }
+    }
+
+    private fun cleanRecommendAdConfResponse(
+        classLoader: ClassLoader,
+        response: Any,
+        blockPromo: Boolean,
+        blockHot: Boolean,
+        blockAd: Boolean
+    ): Any {
+        val body = XposedHelpers.callMethod(response, "body") ?: return response
+        val bodyString = XposedHelpers.callMethod(body, "string") as? String ?: return response
+
+        val cleanJson = cleanRecommendAdConfJson(bodyString, blockPromo, blockHot, blockAd)
+        val mediaType = XposedHelpers.callMethod(body, "contentType")
+        val newBody = createResponseBody(classLoader, mediaType, cleanJson)
+        val newBuilder = XposedHelpers.callMethod(response, "newBuilder")
+        XposedHelpers.callMethod(newBuilder, "body", newBody)
+        return XposedHelpers.callMethod(newBuilder, "build")
+    }
+
+    private fun cleanRecommendAdConfJson(
+        jsonStr: String,
+        blockPromo: Boolean,
+        blockHot: Boolean,
+        blockAd: Boolean
+    ): String {
+        try {
+            val root = org.json.JSONObject(jsonStr)
+            val data = root.optJSONArray("data") ?: return jsonStr
+            val newData = org.json.JSONArray()
+
+            for (i in 0 until data.length()) {
+                val pageItem = data.optJSONObject(i) ?: continue
+                val ads = pageItem.optJSONArray("ads") ?: continue
+                val newAds = org.json.JSONArray()
+
+                for (j in 0 until ads.length()) {
+                    val ad = ads.optJSONObject(j) ?: continue
+                    val adType = ad.optInt("adType", -1)
+
+                    // 1. 小酱推广贴 (adType == 8)
+                    if (blockPromo && adType == 8) {
+                        ConfigManager.recordOfficialPromoBlocked()
+                        continue
+                    }
+
+                    // 2. Jumper热议 (adType == 106)
+                    if (blockHot && adType == 106) continue
+
+                    // 3. 商业推广卡片 (adType == 101 或除 8/106 外的其它广告)
+                    if (blockAd && (adType == 101 || (adType != 8 && adType != 106))) continue
+
+                    newAds.put(ad)
+                }
+
+                pageItem.put("ads", newAds)
+                newData.put(pageItem)
+            }
+
+            root.put("data", newData)
             return root.toString()
         } catch (_: Throwable) {
             return jsonStr

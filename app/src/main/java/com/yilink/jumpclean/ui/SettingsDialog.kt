@@ -5,6 +5,8 @@ import android.app.Activity
 import android.app.Dialog
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
@@ -152,15 +154,7 @@ object SettingsDialog {
                 desc = "夜间模式下把 #FFFFFF 文字压成柔白，减轻黑底白字的刺眼感；需重启 App"
             ),
             ActionItem("夜间底色深浅", desc = "在 #121212 ~ #2C2C31 之间选一档") {
-                val cur = prefs.getInt(JumpConstants.KEY_EYE_BLACK_LEVEL, com.yilink.jumpclean.hooks.EyeCareHooks.DEFAULT_LEVEL)
-                android.app.AlertDialog.Builder(activity)
-                    .setTitle("夜间底色")
-                    .setSingleChoiceItems(com.yilink.jumpclean.hooks.EyeCareHooks.BLACK_LEVEL_NAMES, cur) { d, which ->
-                        prefs.edit().putInt(JumpConstants.KEY_EYE_BLACK_LEVEL, which).apply()
-                        Toast.makeText(activity, "已保存，重启 App 后生效", Toast.LENGTH_SHORT).show()
-                        d.dismiss()
-                    }
-                    .show()
+                showBlackLevelDialog(activity, prefs)
             },
 
             SectionHeader("个性化与扩展"),
@@ -414,6 +408,9 @@ object SettingsDialog {
                             if (entry.key == JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV) {
                                 try { com.yilink.jumpclean.hooks.LiquidGlassHooks.refreshFromSettings() } catch (_: Throwable) {}
                             }
+                            if (entry.key == JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST || entry.key == JumpConstants.KEY_ENABLE_KEYWORD_BLOCK) {
+                                try { com.yilink.jumpclean.hooks.FeedHooks.cleanCurrentAdapter() } catch (_: Throwable) {}
+                            }
                             if (entry.key in restartRequiredKeys) {
                                 showRestartPrompt(activity, isDark, dp)
                             }
@@ -466,6 +463,9 @@ object SettingsDialog {
                             // 本对话框盖在 MainActivity 上，MainActivity 不会 onResume，所以玻璃开关要主动触发一次应用
                             if (entry.key == JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV) {
                                 try { com.yilink.jumpclean.hooks.LiquidGlassHooks.refreshFromSettings() } catch (_: Throwable) {}
+                            }
+                            if (entry.key == JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST || entry.key == JumpConstants.KEY_ENABLE_KEYWORD_BLOCK) {
+                                try { com.yilink.jumpclean.hooks.FeedHooks.cleanCurrentAdapter() } catch (_: Throwable) {}
                             }
                             if (entry.key in restartRequiredKeys) {
                                 showRestartPrompt(activity, isDark, dp)
@@ -671,6 +671,217 @@ object SettingsDialog {
         promptDialog.show()
         promptDialog.window?.let { win ->
             win.setLayout(dp(300), ViewGroup.LayoutParams.WRAP_CONTENT)
+            win.setGravity(Gravity.CENTER)
+        }
+    }
+
+    private fun showBlackLevelDialog(activity: Activity, prefs: SharedPreferences) {
+        val dp = { value: Int -> (value * activity.resources.displayMetrics.density).toInt() }
+        val isDark = (activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+
+        // 固定纯深色暗黑主题，沉浸式预览夜间模式
+        val dialogBg = Color.parseColor("#18181A")
+        val primaryText = Color.parseColor("#F4F4F5")
+        val secondaryText = Color.parseColor("#8E8E93")
+
+        val currentLevel = prefs.getInt(
+            JumpConstants.KEY_EYE_BLACK_LEVEL,
+            com.yilink.jumpclean.hooks.EyeCareHooks.DEFAULT_LEVEL
+        ).coerceIn(0, com.yilink.jumpclean.hooks.EyeCareHooks.BLACK_LEVELS.size - 1)
+
+        val dialog = Dialog(activity)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(20), dp(20), dp(18))
+            background = GradientDrawable().apply {
+                setColor(dialogBg)
+                cornerRadius = dp(20).toFloat()
+                setStroke(dp(1), Color.parseColor("#2E2E32"))
+            }
+        }
+
+        val titleView = TextView(activity).apply {
+            text = "夜间底色深浅"
+            textSize = 17.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(primaryText)
+        }
+        val subTitle = TextView(activity).apply {
+            text = "轻点色块，在被窝里选一档最舒适的暗色"
+            textSize = 12f
+            setTextColor(secondaryText)
+            setPadding(0, dp(4), 0, dp(14))
+        }
+        root.addView(titleView)
+        root.addView(subTitle)
+
+        var selectedLevel = currentLevel
+        val names = com.yilink.jumpclean.hooks.EyeCareHooks.BLACK_LEVEL_NAMES
+        val colors = com.yilink.jumpclean.hooks.EyeCareHooks.BLACK_LEVELS
+        val shortLabels = arrayOf("极深", "深灰", "微紫", "稍浅", "更浅")
+        val selectStrokeColor = Color.parseColor("#A1A1AA") // 低调柔白边框，不晃眼
+
+        // ── 1. 顶部大尺寸夜间实景模拟卡片 ──
+        val previewCard = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(88)
+            ).apply {
+                bottomMargin = dp(14)
+            }
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = GradientDrawable().apply {
+                setColor(colors[selectedLevel])
+                cornerRadius = dp(16).toFloat()
+                setStroke(dp(1), Color.parseColor("#333336"))
+            }
+        }
+
+        val previewHeader = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        val previewTitle = TextView(activity).apply {
+            text = "塞尔达传说：王国之泪"
+            textSize = 14f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#E4E4E7"))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val previewHexTag = TextView(activity).apply {
+            text = String.format("#%06X", (0xFFFFFF and colors[selectedLevel]))
+            textSize = 11f
+            setTextColor(Color.WHITE)
+            setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
+            setPadding(dp(7), dp(2), dp(7), dp(2))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#26FFFFFF"))
+                cornerRadius = dp(6).toFloat()
+            }
+        }
+        previewHeader.addView(previewTitle)
+        previewHeader.addView(previewHexTag)
+        previewCard.addView(previewHeader)
+
+        val previewSub = TextView(activity).apply {
+            text = "“造完这台高达就睡” · 凌晨 03:45"
+            textSize = 12f
+            setTextColor(Color.parseColor("#A1A1AA"))
+            setPadding(0, dp(4), 0, 0)
+        }
+        val previewHint = TextView(activity).apply {
+            text = "柔白文字实景预览 · 保护深夜双眼"
+            textSize = 11f
+            setTextColor(Color.parseColor("#71717A"))
+            setPadding(0, dp(3), 0, 0)
+        }
+        previewCard.addView(previewSub)
+        previewCard.addView(previewHint)
+        root.addView(previewCard)
+
+        // ── 2. 中间五等分无缝色带（无缝拼接，去除白色透缝）──
+        val barContainer = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(46)
+            ).apply {
+                bottomMargin = dp(14)
+            }
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(Color.TRANSPARENT)
+            }
+            clipToOutline = true
+        }
+
+        val segmentViews = mutableListOf<LinearLayout>()
+
+        fun renderSegmentSelection() {
+            // 更新顶部实景卡片
+            (previewCard.background as? GradientDrawable)?.setColor(colors[selectedLevel])
+            previewHexTag.text = String.format("#%06X", (0xFFFFFF and colors[selectedLevel]))
+
+            for (idx in segmentViews.indices) {
+                val seg = segmentViews[idx]
+                val isSel = (idx == selectedLevel)
+                val bg = seg.background as? GradientDrawable
+                if (isSel) {
+                    bg?.setStroke(dp(1), selectStrokeColor)
+                } else {
+                    bg?.setStroke(0, Color.TRANSPARENT)
+                }
+                val label = seg.getChildAt(0) as? TextView
+                label?.setTypeface(null, if (isSel) Typeface.BOLD else Typeface.NORMAL)
+                label?.setTextColor(if (isSel) Color.WHITE else Color.parseColor("#71717A"))
+            }
+        }
+
+        for (i in colors.indices) {
+            val isSel = (i == selectedLevel)
+            val segment = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                background = GradientDrawable().apply {
+                    setColor(colors[i])
+                    cornerRadius = dp(6).toFloat()
+                    if (isSel) {
+                        setStroke(dp(1), selectStrokeColor)
+                    }
+                }
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    selectedLevel = i
+                    renderSegmentSelection()
+                }
+            }
+
+            val label = TextView(activity).apply {
+                text = shortLabels[i]
+                textSize = 12f
+                setTextColor(if (isSel) Color.WHITE else Color.parseColor("#71717A"))
+                if (isSel) setTypeface(null, Typeface.BOLD)
+                gravity = Gravity.CENTER
+            }
+            segment.addView(label)
+            segmentViews.add(segment)
+            barContainer.addView(segment)
+        }
+        root.addView(barContainer)
+
+        // 底部保存并生效按钮（纯黑沉浸式低反光深灰卡片底）
+        val confirmBtn = TextView(activity).apply {
+            text = "保存并生效"
+            textSize = 14.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#F4F4F5"))
+            gravity = Gravity.CENTER
+            setPadding(0, dp(11), 0, dp(11))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#27272A"))
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(1), Color.parseColor("#3F3F46"))
+            }
+            setOnClickListener {
+                prefs.edit().putInt(JumpConstants.KEY_EYE_BLACK_LEVEL, selectedLevel).apply()
+                Toast.makeText(activity, "已保存，重启生效", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
+        }
+        root.addView(confirmBtn)
+
+        dialog.setContentView(root)
+        dialog.show()
+        dialog.window?.let { win ->
+            win.setLayout(dp(330), ViewGroup.LayoutParams.WRAP_CONTENT)
             win.setGravity(Gravity.CENTER)
         }
     }

@@ -82,8 +82,8 @@ object JumpConstants {
     const val MIN_DELAY_TO_COMPRESS = 400L
     const val COMPRESSED_DELAY = 0L
 
-    // 布局监听节流阈值
-    const val THROTTLE_INTERVAL_MS = 50L
+    // 布局监听节流阈值 (由 50ms 调整为 300ms，大幅降低主线程微掉帧)
+    const val THROTTLE_INTERVAL_MS = 300L
 
     // 静态预编译正则
     val REGEX_YEAR_PREFIX = Regex("""^\d{4}-""")

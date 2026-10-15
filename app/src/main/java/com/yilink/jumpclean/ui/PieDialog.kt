@@ -308,16 +308,19 @@ object PieDialog {
         }
         root.addView(scrollView)
 
-        // 5. 底部收起按钮
+        // 5. 底部收起按钮（温润浅灰质感，告别刺眼大红）
+        val closeBtnBg = if (isDark) Color.parseColor("#323235") else Color.parseColor("#F0F0F2")
+        val closeBtnText = if (isDark) Color.parseColor("#E4E4E7") else Color.parseColor("#3A3A3C")
+
         val closeBtn = TextView(activity).apply {
             text = "吃饱了，收起大饼"
             textSize = 14f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
+            setTextColor(closeBtnText)
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
-                setColor(accentRed)
-                cornerRadius = dp(20).toFloat()
+                setColor(closeBtnBg)
+                cornerRadius = dp(14).toFloat()
             }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
