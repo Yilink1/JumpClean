@@ -30,6 +30,12 @@ object JumpHooks {
         // 5. 设置入口挂载（原生设置页第一项插入、长按「我的」Tab 快捷入口）
         SettingsEntryHooks.hook(lpparam)
 
+        // 6. 实验性视觉层（底栏液态玻璃物理折射）
+        LiquidGlassHooks.hook(lpparam)
+
+        // 7. 夜间护眼（纯黑底色 → 深灰，可选柔化纯白文字）
+        EyeCareHooks.hook(lpparam)
+
         ConfigManager.log("[Init] JumpClean 加载完成")
     }
 }

@@ -89,7 +89,8 @@ object ConfigManager {
             JumpConstants.KEY_HIDE_GAME_MEMBER_GUIDE,
             JumpConstants.KEY_HIDE_GAME_FIND_AD,
             JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE,
-            JumpConstants.KEY_HIDE_GAME_PRICE_ADS -> true
+            JumpConstants.KEY_HIDE_GAME_PRICE_ADS,
+            JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV -> true
 
             JumpConstants.KEY_HIDE_PUBLISH_TOPIC,
             JumpConstants.KEY_HIDE_PHOTO_WALL,
@@ -120,6 +121,46 @@ object ConfigManager {
             logError("读取设置失败: $key", e)
             getDefaultFeatureValue(key)
         }
+    }
+
+    fun getIntPref(key: String, defaultVal: Int): Int {
+        val ctx = getValidAppContext() ?: return defaultVal
+        return try {
+            ctx.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
+                .getInt(key, defaultVal)
+        } catch (_: Throwable) {
+            defaultVal
+        }
+    }
+
+    fun setIntPref(key: String, value: Int) {
+        val ctx = getValidAppContext() ?: return
+        try {
+            ctx.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putInt(key, value)
+                .apply()
+        } catch (_: Throwable) {}
+    }
+
+    fun getBooleanPref(key: String, defaultVal: Boolean): Boolean {
+        val ctx = getValidAppContext() ?: return defaultVal
+        return try {
+            ctx.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(key, defaultVal)
+        } catch (_: Throwable) {
+            defaultVal
+        }
+    }
+
+    fun setBooleanPref(key: String, value: Boolean) {
+        val ctx = getValidAppContext() ?: return
+        try {
+            ctx.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(key, value)
+                .apply()
+        } catch (_: Throwable) {}
     }
 
     fun isFeatureEnabledSafe(classLoader: ClassLoader? = null, key: String): Boolean {
