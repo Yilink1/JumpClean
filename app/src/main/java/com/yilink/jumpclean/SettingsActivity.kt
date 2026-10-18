@@ -23,6 +23,13 @@ import android.widget.Toast
 
 class SettingsActivity : Activity() {
 
+    // 激活卡片的可变视图引用：onResume 时刷新，避免状态变化后要杀进程才能更新
+    private var activeCardRef: LinearLayout? = null
+    private var checkIconRef: TextView? = null
+    private var activeTitleRef: TextView? = null
+    private var activeDescRef: TextView? = null
+    private var lastActiveState: Boolean? = null
+
     /**
      * 激活状态锚点方法：
      * 编译进 APK 时恒定返回 false。
@@ -118,6 +125,7 @@ class SettingsActivity : Activity() {
 
         // 2. 激活状态大卡片（微渐变背景 + 呼吸光环对勾）
         val isActive = isActivated()
+        lastActiveState = isActive
         val activeThemeStart = if (isActive) Color.parseColor("#00B875") else Color.parseColor("#FF5C5C")
         val activeThemeEnd = if (isActive) Color.parseColor("#009E60") else Color.parseColor("#E04848")
 
@@ -161,23 +169,29 @@ class SettingsActivity : Activity() {
                 gravity = Gravity.CENTER
             }
         }
+        checkIconRef = checkIcon
         iconRing.addView(checkIcon)
 
         val activeTextGroup = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(TextView(context).apply {
+            val titleView = TextView(context).apply {
                 text = if (isActive) "已激活" else "未激活"
                 textSize = 17f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.WHITE)
-            })
-            addView(TextView(context).apply {
+            }
+            val descView = TextView(context).apply {
                 text = if (isActive) "LSPosed / Hook 服务正常运行" else "请在 LSPosed 中勾选本模块与宿主"
                 textSize = 12f
                 setTextColor(if (isActive) Color.parseColor("#E0F8EE") else Color.parseColor("#FFEAEA"))
                 setPadding(0, dp(2), 0, 0)
-            })
+            }
+            activeTitleRef = titleView
+            activeDescRef = descView
+            addView(titleView)
+            addView(descView)
         }
+        activeCardRef = activeCard
         activeCard.addView(iconRing)
         activeCard.addView(activeTextGroup)
         container.addView(activeCard)
@@ -317,6 +331,35 @@ class SettingsActivity : Activity() {
                 @Suppress("DEPRECATION")
                 win.decorView.systemUiVisibility = flags
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 在 LSPosed 里刚勾选模块后回到本页时重新检测，状态变化立即刷新卡片
+        val now = isActivated()
+        if (lastActiveState != now) {
+            lastActiveState = now
+            updateActivationViews(now)
+        }
+    }
+
+    private fun updateActivationViews(isActive: Boolean) {
+        val themeStart = if (isActive) Color.parseColor("#00B875") else Color.parseColor("#FF5C5C")
+        val themeEnd = if (isActive) Color.parseColor("#009E60") else Color.parseColor("#E04848")
+        val radius = 16f * resources.displayMetrics.density
+        activeCardRef?.background = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(themeStart, themeEnd)
+        ).apply { cornerRadius = radius }
+        checkIconRef?.apply {
+            text = if (isActive) "✓" else "!"
+            setTextColor(themeStart)
+        }
+        activeTitleRef?.text = if (isActive) "已激活" else "未激活"
+        activeDescRef?.apply {
+            text = if (isActive) "LSPosed / Hook 服务正常运行" else "请在 LSPosed 中勾选本模块与宿主"
+            setTextColor(if (isActive) Color.parseColor("#E0F8EE") else Color.parseColor("#FFEAEA"))
         }
     }
 }

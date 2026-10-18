@@ -33,6 +33,38 @@ object ConfigManager {
     // 内存安全拦截计数器
     private val blockedPromoCounter = AtomicInteger(-1)
 
+    // ── 热路径配置缓存 ──
+    // hook 回调（View 显隐/列表绑定）每帧可能触发数十次，直接读 SP 有锁开销，
+    // 兜底路径还会读 XML 文件。这里全部走内存缓存，靠 SP 变更监听失效。
+    private val boolPrefCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    private val intPrefCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    // SP 持有 listener 弱引用，必须自己保持强引用，否则 GC 后缓存永不失效
+    private val prefChangeListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == null) {
+            boolPrefCache.clear(); intPrefCache.clear()
+        } else {
+            boolPrefCache.remove(key); intPrefCache.remove(key)
+        }
+    }
+    @Volatile private var prefListenerHooked = false
+
+    // XML 兜底路径的 TTL 缓存（仅进程极早期 Context 不可用时使用）
+    private val fallbackBoolCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Boolean>>()
+    private const val FALLBACK_TTL_MS = 2000L
+
+    private fun prefsOf(ctx: Context) =
+        ctx.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE).also { sp ->
+            if (!prefListenerHooked) {
+                synchronized(this) {
+                    if (!prefListenerHooked) {
+                        sp.registerOnSharedPreferenceChangeListener(prefChangeListener)
+                        prefListenerHooked = true
+                    }
+                }
+            }
+        }
+
     @Volatile
     private var cachedMatchers: List<KeywordMatcher>? = null
 
@@ -113,10 +145,12 @@ object ConfigManager {
     }
 
     fun isFeatureEnabled(context: Context, key: String): Boolean {
+        boolPrefCache[key]?.let { return it }
         return try {
             val defaultVal = getDefaultFeatureValue(key)
-            context.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
-                .getBoolean(key, defaultVal)
+            val value = prefsOf(context).getBoolean(key, defaultVal)
+            boolPrefCache[key] = value
+            value
         } catch (e: Exception) {
             logError("读取设置失败: $key", e)
             getDefaultFeatureValue(key)
@@ -124,42 +158,42 @@ object ConfigManager {
     }
 
     fun getIntPref(key: String, defaultVal: Int): Int {
+        intPrefCache[key]?.let { return it }
         val ctx = getValidAppContext() ?: return defaultVal
         return try {
-            ctx.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
-                .getInt(key, defaultVal)
+            val value = prefsOf(ctx).getInt(key, defaultVal)
+            intPrefCache[key] = value
+            value
         } catch (_: Throwable) {
             defaultVal
         }
     }
 
     fun setIntPref(key: String, value: Int) {
+        intPrefCache[key] = value
         val ctx = getValidAppContext() ?: return
         try {
-            ctx.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .putInt(key, value)
-                .apply()
+            prefsOf(ctx).edit().putInt(key, value).apply()
         } catch (_: Throwable) {}
     }
 
     fun getBooleanPref(key: String, defaultVal: Boolean): Boolean {
+        boolPrefCache[key]?.let { return it }
         val ctx = getValidAppContext() ?: return defaultVal
         return try {
-            ctx.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
-                .getBoolean(key, defaultVal)
+            val value = prefsOf(ctx).getBoolean(key, defaultVal)
+            boolPrefCache[key] = value
+            value
         } catch (_: Throwable) {
             defaultVal
         }
     }
 
     fun setBooleanPref(key: String, value: Boolean) {
+        boolPrefCache[key] = value
         val ctx = getValidAppContext() ?: return
         try {
-            ctx.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .putBoolean(key, value)
-                .apply()
+            prefsOf(ctx).edit().putBoolean(key, value).apply()
         } catch (_: Throwable) {}
     }
 
@@ -180,10 +214,14 @@ object ConfigManager {
             }
         } catch (_: Exception) {}
 
-        return try {
+        // Context 就绪前的极早期才走到这里；加 2 秒 TTL 防止主线程反复读文件
+        fallbackBoolCache[key]?.let { (ts, v) ->
+            if (System.currentTimeMillis() - ts < FALLBACK_TTL_MS) return v
+        }
+        val result = try {
             val candidatePaths = listOf(
-                "/data/user/0/com.vgjump.jump/shared_prefs/${JumpConstants.PREFS_NAME}.xml",
-                "/data/data/com.vgjump.jump/shared_prefs/${JumpConstants.PREFS_NAME}.xml"
+                "/data/user/0/${JumpConstants.TARGET_PACKAGE}/shared_prefs/${JumpConstants.PREFS_NAME}.xml",
+                "/data/data/${JumpConstants.TARGET_PACKAGE}/shared_prefs/${JumpConstants.PREFS_NAME}.xml"
             )
             val spFile = candidatePaths.map { File(it) }.firstOrNull { it.exists() }
             if (spFile != null) {
@@ -201,6 +239,8 @@ object ConfigManager {
         } catch (_: Exception) {
             getDefaultFeatureValue(key)
         }
+        fallbackBoolCache[key] = System.currentTimeMillis() to result
+        return result
     }
 
     private val lastErrorToastTime = AtomicLong(0L)

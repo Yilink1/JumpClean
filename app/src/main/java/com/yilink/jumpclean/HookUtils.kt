@@ -13,6 +13,7 @@ import java.lang.reflect.Field
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
@@ -197,7 +198,8 @@ object HookUtils {
         val paddingRight: Int
     )
 
-    private val collapsedViewStates = WeakHashMap<View, ViewOriginalState>()
+    // UI 线程专用，但 hook 回调线程不完全可控，包一层同步防偶发并发崩溃
+    private val collapsedViewStates = Collections.synchronizedMap(WeakHashMap<View, ViewOriginalState>())
 
     fun isCollapsed(view: View): Boolean = collapsedViewStates.containsKey(view)
     fun hasCollapsedViews(): Boolean = collapsedViewStates.isNotEmpty()
