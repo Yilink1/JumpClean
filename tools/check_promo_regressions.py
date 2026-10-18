@@ -6,6 +6,7 @@ Host/Xposed fakes test failure handling; they do not verify a real LSPosed sessi
 import os
 from pathlib import Path
 import subprocess
+from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 STUDIO = Path(os.environ.get("STUDIO_HOME", "C:/Program Files/Android/Android Studio"))
@@ -197,6 +198,34 @@ public class Regression {
         finally { pass.leave(adapter); }
         var afterFailure=pass.enter(adapter);
         check(afterFailure!=next && afterFailure.shouldProcess(batch),"Exception cleanup releases pass"); pass.leave(adapter);
+        var glass=com.yilink.jumpclean.hooks.GlassStyle.INSTANCE;
+        var defaults=glass.defaults();
+        check(!defaults.getDynamicBg(),"Glass does not redraw continuously by default");
+        check(defaults.getDay().getOpacity()==44 && defaults.getNight().getOpacity()==42,"Separate day/night defaults");
+        check(defaults.getEdge()==1,"Standard edge highlight by default");
+        check(glass.tintColor(defaults.getDay(),false)!=glass.tintColor(defaults.getNight(),true),"Theme-specific glass colors");
+        check(glass.accentColor(defaults.getDay(),false)!=glass.accentColor(defaults.getNight(),true),"Theme-specific foreground colors");
+        var copy=glass.defaults(); copy.copyFrom(defaults); copy.getDay().setTone(2);
+        check(defaults.getDay().getTone()==0 && copy.getNight().getTone()==0,"Deep copy keeps both palettes independent");
+        var prefs=ConfigManager.INSTANCE;
+        prefs.intPrefs.put("lg_refraction",99); prefs.intPrefs.put("lg_tint_strength",99);
+        check(glass.load().getDay().getOpacity()==44,"Legacy optical settings do not override new tuning");
+        prefs.intPrefs.put("lg_v4_day_tone",2); prefs.intPrefs.put("lg_v4_day_opacity",24);
+        prefs.intPrefs.put("lg_v4_night_tone",1); prefs.intPrefs.put("lg_v4_night_opacity",40);
+        prefs.intPrefs.put("lg_v4_day_accent",1); prefs.intPrefs.put("lg_v4_night_accent",2);
+        prefs.intPrefs.put("lg_v4_edge",2); prefs.boolPrefs.put("lg_v4_dynamic",true);
+        var loaded=glass.load();
+        check(loaded.getDay().getTone()==2 && loaded.getDay().getOpacity()==24 && loaded.getDay().getAccent()==1,"Day preferences load independently");
+        check(loaded.getNight().getTone()==1 && loaded.getNight().getOpacity()==40 && loaded.getNight().getAccent()==2,"Night preferences load independently");
+        check(loaded.getEdge()==2 && loaded.getDynamicBg(),"Edge preset and dynamic background load");
+        prefs.intPrefs.put("lg_v4_day_opacity",999); prefs.intPrefs.put("lg_v4_night_opacity",-99);
+        prefs.intPrefs.put("lg_v4_day_tone",99); prefs.intPrefs.put("lg_v4_night_accent",-1);
+        prefs.intPrefs.put("lg_v4_pill_height",0); prefs.intPrefs.put("lg_v4_pill_margin_h",999);
+        loaded=glass.load();
+        check(loaded.getDay().getOpacity()==55 && loaded.getNight().getOpacity()==8,"Invalid opacity bounded");
+        check(loaded.getDay().getTone()==2 && loaded.getNight().getAccent()==0,"Invalid palette indices bounded");
+        check(loaded.getPillHeight()==60 && loaded.getPillMarginH()==40,"Geometry bounded");
+        check(glass.edgeHighlightOpacity(0,false) < glass.edgeHighlightOpacity(2,false),"Edge presets differ");
         System.out.println("PASS: " + checks + " assertions (compiled production code; fake host/Xposed)");
     }
 }
@@ -207,9 +236,13 @@ for name, source in sources.items():
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source, encoding="utf-8")
 stdlib = next((CACHE / "org.jetbrains.kotlin/kotlin-stdlib/1.9.24").glob("*/*.jar"))
+glass_aar = next((CACHE / "com.github.QWEA0/liquidglass/v2.0.11").glob("*/*.aar"))
+glass_jar = OUT / "liquidglass.jar"
+with ZipFile(glass_aar) as bundle:
+    glass_jar.write_bytes(bundle.read("classes.jar"))
 classpath = os.pathsep.join(map(str, [
     OUT, ROOT / "app/build/tmp/kotlin-classes/debug",
-    STUDIO / "plugins/grazie/lib/org.json-json.jar", stdlib,
+    STUDIO / "plugins/grazie/lib/org.json-json.jar", stdlib, glass_jar,
     SDK / "platforms/android-34/android.jar", ROOT / "app/libs/XposedBridgeApi-82.jar",
 ]))
 subprocess.run([str(STUDIO / "jbr/bin/javac"), "-encoding", "UTF-8", "-cp", classpath,

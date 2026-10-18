@@ -3,6 +3,7 @@ package com.yilink.jumpclean.ui
 import android.app.Activity
 import android.app.Dialog
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -11,10 +12,9 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
-import android.animation.ValueAnimator
-import android.animation.TimeInterpolator
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
@@ -26,557 +26,335 @@ import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import com.example.liquidglass.LiquidGlassTabBar
 import com.yilink.jumpclean.hooks.GlassShadowView
 import com.yilink.jumpclean.hooks.GlassStyle
-import com.yilink.jumpclean.hooks.JumpGlassTabBar
+import com.yilink.jumpclean.hooks.GlassTabBar
 import com.yilink.jumpclean.hooks.LiquidGlassHooks
-import kotlin.reflect.KMutableProperty0
+import com.yilink.jumpclean.hooks.TabIcons
 
-/**
- * 液态玻璃参数微调。
- * 顶部是一条「预览底栏」，和主界面共用同一套 GlassStyle.applyTo，
- * 滑动任何参数都能立刻在预览上看到效果；在预览条上按住/滑动可以试水滴手感。
- */
+/** 日夜两套配色、真实玻璃预览，以及少量直观的外观选项。 */
 object LiquidGlassSettingsDialog {
-
     fun show(activity: Activity, live: Boolean = false, parent: Dialog? = null, onApplied: (() -> Unit)? = null) {
-        val dm = activity.resources.displayMetrics
-        val density = dm.density
-        val dp = { value: Int -> (value * density + 0.5f).toInt() }
-        val isDark = (activity.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
-                android.content.res.Configuration.UI_MODE_NIGHT_YES
-
+        val density = activity.resources.displayMetrics.density
+        fun dp(value: Int) = (value * density + 0.5f).toInt()
+        val dark = GlassStyle.isNight(activity)
+        val bg = if (dark) 0xFF191B21.toInt() else 0xFFFAFAFC.toInt()
+        val cardBg = if (dark) 0xFF252830.toInt() else Color.WHITE
+        val ink = if (dark) 0xFFF0F2F7.toInt() else 0xFF202633.toInt()
+        val secondary = if (dark) 0xFFA3A9B7.toInt() else 0xFF737B8A.toInt()
+        val accent = if (dark) 0xFF9CCAFF.toInt() else 0xFF2165AB.toInt()
+        val activeBg = if (dark) 0xFF354359.toInt() else 0xFFE9F1FC.toInt()
+        val p = GlassStyle.load()
+        var previewNight = dark
+        var saved = false
+        var syncing = false
+        var expanded = false
+        val liveBar = if (live) LiquidGlassHooks.pillOf(activity) else null
         val dialog = Dialog(activity)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
 
-        val dialogBg = if (isDark) Color.parseColor("#202022") else Color.parseColor("#FFFFFF")
-        val primaryText = if (isDark) Color.parseColor("#F5F5F7") else Color.parseColor("#1D1D1F")
-        val secondaryText = if (isDark) Color.parseColor("#8E8E93") else Color.parseColor("#86868B")
-        val cardBg = if (isDark) Color.parseColor("#2C2C2E") else Color.parseColor("#F5F5F7")
-        val accentRed = Color.parseColor("#FF5252")
-
-        val p = GlassStyle.load()
-        val refreshers = mutableListOf<() -> Unit>()
-        // 从主页进来（长按「我的」）时，面板只占上半屏并直接作用于真实底栏；
-        // 否则（官方设置页里）退回到内置预览条
-        val liveBar = if (live) LiquidGlassHooks.pillOf(activity) else null
-        val snapshot = GlassStyle.Params().also { it.copyFrom(p) }
-
+        fun rounded(color: Int, radius: Int = 14) = GradientDrawable().apply {
+            setColor(color); cornerRadius = dp(radius).toFloat()
+        }
+        fun label(value: String, size: Float = 14f, color: Int = ink, bold: Boolean = false) = TextView(activity).apply {
+            text = value; textSize = size; setTextColor(color)
+            if (bold) setTypeface(null, Typeface.BOLD)
+        }
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(18), dp(18), dp(14))
-            background = GradientDrawable().apply {
-                setColor(dialogBg)
-                if (liveBar != null) {
-                    val r = dp(22).toFloat()
-                    cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, r, r, r, r)
-                } else {
-                    cornerRadius = dp(20).toFloat()
-                }
-            }
+            setPadding(dp(18), dp(20), dp(18), dp(14))
+            background = rounded(bg, 24)
         }
-
-        root.addView(TextView(activity).apply {
-            text = "液态玻璃参数微调"
-            textSize = 18f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(primaryText)
-        })
-        // 实时模式没有内置预览，这行只在内置预览模式出现
-        if (liveBar == null) root.addView(TextView(activity).apply {
-            text = "上面是实时预览：点背景换底色，在底栏上按住或滑动试水滴"
-            textSize = 12f
-            setTextColor(secondaryText)
-            setPadding(0, dp(2), 0, dp(10))
+        root.addView(label("液态玻璃", 21f, bold = true))
+        root.addView(label("跟随 Jump 明暗主题，日间与夜间分别配色", 12f, secondary).apply {
+            setPadding(0, dp(5), 0, dp(14))
         })
 
-        // ───────── 预览 ─────────
-        val backdrop = PreviewBackdrop(activity)
-        val bar = JumpGlassTabBar(activity)
-        bar.setTabs(listOf("首页", "发现", "我的"))
-        bar.sampleSource = backdrop
-
-        // 预览宽度比真机窄，但边距/高度按真实 dp 显示（底边距现在能看出来了）
-        fun barParams() = FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(p.pillHeight)
-        ).apply {
-            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            val m = dp(p.pillMarginH.coerceAtMost(70))
-            leftMargin = m
-            rightMargin = m
-            bottomMargin = dp(p.pillMarginBottom.coerceAtMost(48))
+        val backdrop = PreviewScene(activity)
+        val bar = GlassTabBar(activity).apply {
+            setTabs(listOf("首页", "发现", "我的").map {
+                LiquidGlassTabBar.TabItem(it, TabIcons.forTitle(it))
+            })
+            backdropSource = backdrop
         }
-
-        val shadowView = GlassShadowView(activity)
-
-        val previewFrame = FrameLayout(activity).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(150)
-            ).apply { bottomMargin = dp(4) }
+        val shadow = GlassShadowView(activity)
+        val preview = FrameLayout(activity).apply {
             clipToOutline = true
             outlineProvider = object : ViewOutlineProvider() {
                 override fun getOutline(view: View, outline: Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, dp(14).toFloat())
+                    outline.setRoundRect(0, 0, view.width, view.height, dp(18).toFloat())
                 }
             }
-            addView(backdrop, FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-            ))
-            addView(shadowView, FrameLayout.LayoutParams(1, 1))
-            addView(bar, barParams())
+            addView(backdrop, FrameLayout.LayoutParams(-1, -1))
+            addView(shadow, FrameLayout.LayoutParams(1, 1))
+            addView(bar, FrameLayout.LayoutParams(-1, dp(p.pillHeight)))
         }
-        backdrop.setOnClickListener {
-            backdrop.mode = (backdrop.mode + 1) % 3
-            backdrop.invalidate()
-            bar.invalidate()
-        }
-        // 背景持续滚动：折射、彩虹色散、高光都要有「细节在动」才看得出来
-        val scrollAnim = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 7000
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = TimeInterpolator { it }
-            addUpdateListener {
-                backdrop.phase = it.animatedValue as Float
-                backdrop.invalidate()
-                bar.invalidate()
-            }
-        }
-        scrollAnim.start()
-        if (liveBar != null) { scrollAnim.cancel(); parent?.hide() }
-        if (liveBar == null) root.addView(previewFrame)
-        root.addView(TextView(activity).apply {
-            text = if (liveBar != null) "实时作用于真实底栏：可以直接在底栏上滑动/按住试水滴；关闭面板即保留当前效果，不满意点「撤销」"
-            else "预览窄于真机，边距和高度按真实 dp 显示；背景自动滚动，方便看折射与彩虹"
-            textSize = 10.5f
-            setTextColor(secondaryText)
-            setPadding(dp(2), 0, 0, dp(6))
+        root.addView(preview, LinearLayout.LayoutParams(-1, dp(166)))
+        backdrop.onMoved = { bar.invalidate() }
+        root.addView(label("滑动背景看通透感，拖动底栏试试手感", 11f, secondary).apply {
+            gravity = Gravity.CENTER; setPadding(0, dp(7), 0, dp(3))
         })
 
-        // 实测读数：玻璃真实的重绘帧率与 CPU 录制耗时，实时模式下始终显示在面板顶部（不依赖任何日志开关）
-        val perfView = TextView(activity).apply {
-            textSize = 11.5f
-            setTextColor(secondaryText)
-            setPadding(dp(4), 0, 0, dp(8))
-            text = "玻璃实测：采样中…"
-        }
-        val perfTick = object : Runnable {
-            override fun run() {
-                if (!perfView.isAttachedToWindow) return
-                val bar2 = liveBar ?: return
-                val st = bar2.lastFrameStats
-                perfView.text = if (st == null) "玻璃实测：暂无帧统计（底栏还没重绘过）"
-                else "玻璃实测：${st.drawFps} fps · CPU 录制 ${"%.2f".format(st.totalMs)} ms · ${st.effectName}" +
-                    if (p.dynamicBg) "（背景持续刷新：开）" else "（背景持续刷新：关）"
-                perfView.postDelayed(this, 1000)
-            }
-        }
-        if (liveBar != null) {
-            liveBar.statsForced = true
-            root.addView(perfView)
-            perfView.post(perfTick)
-        }
-
-        // 唯一的关闭回调：内置预览模式只停动画；实时模式所见即所得，关掉就保留当前效果
-        dialog.setOnDismissListener {
-            scrollAnim.cancel()
-            if (liveBar != null) {
-                perfView.removeCallbacks(perfTick)
-                liveBar.statsForced = false
-                GlassStyle.save(p)
-                try { LiquidGlassHooks.refreshFromSettings() } catch (_: Throwable) {}
-                parent?.show()
-            }
-        }
-
-        fun refreshPreview() {
-            if (liveBar != null) {
-                LiquidGlassHooks.applyStyleLive(activity, p)
-                return
-            }
-            GlassStyle.applyTo(bar, p, density)
-            bar.layoutParams = barParams()
-            if (p.shadowStrength <= 0) {
-                shadowView.visibility = View.GONE
-            } else {
-                shadowView.visibility = View.VISIBLE
-                val pad = shadowView.configure(
-                    p.shadowStrength / 100f, dp(p.shadowBlur).toFloat(), dp(p.shadowOffset).toFloat(),
-                    if (p.cornerDp <= 0) 9999f else dp(p.cornerDp).toFloat()
-                )
-                val m = dp(p.pillMarginH.coerceAtMost(70))
-                shadowView.layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(p.pillHeight) + pad * 2
-                ).apply {
+        val content = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        val refreshers = mutableListOf<() -> Unit>()
+        var lastGeometry: Triple<Int, Int, Int>? = null
+        var shadowNight: Boolean? = null
+        fun palette() = if (previewNight) p.night else p.day
+        fun updatePreview() {
+            backdrop.night = previewNight
+            backdrop.invalidate()
+            GlassStyle.apply(bar, p, previewNight)
+            val margin = dp(p.pillMarginH)
+            val bottom = dp(p.pillMarginBottom)
+            val geometry = Triple(p.pillHeight, p.pillMarginH, p.pillMarginBottom)
+            if (lastGeometry != geometry) {
+                bar.layoutParams = FrameLayout.LayoutParams(-1, dp(p.pillHeight)).apply {
                     gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                    leftMargin = m - pad
-                    rightMargin = m - pad
-                    bottomMargin = dp(p.pillMarginBottom.coerceAtMost(48)) - pad
+                    leftMargin = margin; rightMargin = margin; bottomMargin = bottom
                 }
             }
+            if (lastGeometry != geometry || shadowNight != previewNight) {
+                val pad = shadow.configure(GlassStyle.shadowStrength(previewNight), dp(p.shadowBlur).toFloat(),
+                    dp(p.shadowOffset).toFloat(), 9999f)
+                shadow.layoutParams = FrameLayout.LayoutParams(-1, dp(p.pillHeight) + pad * 2).apply {
+                    gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                    leftMargin = margin - pad; rightMargin = margin - pad; bottomMargin = bottom - pad
+                }
+                shadowNight = previewNight
+            }
+            lastGeometry = geometry
             bar.invalidate()
+            // 预览切换日夜不改变宿主主题，真实底栏仍使用宿主当前的配色。
+            if (liveBar != null) LiquidGlassHooks.applyStyleLive(activity, p)
         }
-        refreshPreview()
-
-        // ───────── 行构造器 ─────────
-        val scrollContent = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-
-        fun section(title: String) {
-            scrollContent.addView(TextView(activity).apply {
-                text = title
-                textSize = 12f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(secondaryText)
-                setPadding(dp(4), dp(8), 0, dp(6))
-            })
+        fun sync() {
+            syncing = true
+            try { refreshers.forEach { it() } } finally { syncing = false }
+            updatePreview()
         }
-
+        fun section(value: String): TextView = label(value, 12f, secondary, true).apply {
+            setPadding(dp(2), dp(14), 0, dp(7)); content.addView(this)
+        }
         fun card(): LinearLayout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            background = GradientDrawable().apply {
-                setColor(cardBg)
-                cornerRadius = dp(12).toFloat()
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(8) }
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = rounded(cardBg)
+            content.addView(this, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(7) })
         }
-
-        fun titleText(text: String) = TextView(activity).apply {
-            this.text = text
-            textSize = 14f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(primaryText)
-        }
-
-        fun slider(title: String, unit: String, min: Int, max: Int, prop: KMutableProperty0<Int>) {
-            val container = card()
-            val header = LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            val titleTxt = titleText(title).apply {
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            val valTxt = TextView(activity).apply {
-                textSize = 13f
-                setTextColor(accentRed)
-                setTypeface(null, Typeface.BOLD)
-            }
-            header.addView(titleTxt)
-            header.addView(valTxt)
-            container.addView(header)
-
-            val seek = SeekBar(activity)
-            seek.max = max - min
-            fun sync() {
-                val v = prop.get().coerceIn(min, max)
-                seek.progress = v - min
-                valTxt.text = "$v$unit"
-            }
-            sync()
-            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val v = progress + min
-                    valTxt.text = "$v$unit"
-                    if (fromUser) {
-                        prop.set(v)
-                        refreshPreview()
-                    }
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {}
-            })
-            container.addView(seek)
-            scrollContent.addView(container)
-            refreshers += { sync() }
-        }
-
-        fun choice(title: String, options: List<String>, prop: KMutableProperty0<Int>) {
-            val container = card()
-            container.addView(titleText(title))
-            val rowView = LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(0, dp(8), 0, 0)
-            }
-            val chips = options.mapIndexed { index, label ->
-                TextView(activity).apply {
-                    text = label
-                    textSize = 12.5f
+        fun choice(title: String, options: () -> List<String>, get: () -> Int, set: (Int) -> Unit) {
+            val box = card()
+            if (title.isNotEmpty()) box.addView(label(title, bold = true))
+            val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+            if (title.isNotEmpty()) row.setPadding(0, dp(9), 0, 0)
+            val chips = options().mapIndexed { index, _ ->
+                label("", 13f).apply {
                     gravity = Gravity.CENTER
-                    setPadding(dp(4), dp(7), dp(4), dp(7))
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                        .apply { if (index > 0) leftMargin = dp(6) }
-                    setOnClickListener {
-                        prop.set(index)
-                        refreshers.forEach { it() }
-                        refreshPreview()
-                    }
+                    minHeight = dp(40)
+                    setPadding(dp(4), dp(8), dp(4), dp(8))
+                    setOnClickListener { set(index); sync() }
+                    row.addView(this, LinearLayout.LayoutParams(0, -2, 1f).apply {
+                        if (index > 0) leftMargin = dp(6)
+                    })
                 }
             }
-            chips.forEach { rowView.addView(it) }
-            container.addView(rowView)
-            scrollContent.addView(container)
-            fun sync() {
-                chips.forEachIndexed { index, tv ->
-                    val on = index == prop.get()
-                    tv.setTextColor(if (on) Color.WHITE else primaryText)
-                    tv.setTypeface(null, if (on) Typeface.BOLD else Typeface.NORMAL)
-                    tv.background = GradientDrawable().apply {
-                        setColor(if (on) accentRed else if (isDark) Color.parseColor("#3A3A3C") else Color.parseColor("#E5E5EA"))
-                        cornerRadius = dp(8).toFloat()
-                    }
+            box.addView(row)
+            refreshers += {
+                val labels = options()
+                chips.forEachIndexed { index, view ->
+                    val selected = get() == index
+                    view.text = labels[index]
+                    view.isSelected = selected
+                    view.setTextColor(if (selected) accent else secondary)
+                    view.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
+                    view.background = rounded(if (selected) activeBg else Color.TRANSPARENT, 10)
                 }
             }
-            sync()
-            refreshers += { sync() }
         }
-
-        fun toggle(title: String, desc: String, prop: KMutableProperty0<Boolean>, onChange: (() -> Unit)? = null) {
-            val container = card().apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
+        fun slider(title: String, min: Int, max: Int, unit: String, get: () -> Int, set: (Int) -> Unit) {
+            val box = card()
+            val row = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL }
+            row.addView(label(title, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
+            val number = label("", 13f, accent)
+            row.addView(number); box.addView(row)
+            val seek = SeekBar(activity).apply {
+                this.max = max - min
+                progressTintList = ColorStateList.valueOf(accent)
+                thumbTintList = ColorStateList.valueOf(accent)
+                minimumHeight = dp(40)
             }
-            val label = LinearLayout(activity).apply {
+            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(view: SeekBar?, value: Int, fromUser: Boolean) {
+                    if (!fromUser || syncing) return
+                    set(value + min); number.text = "${value + min}$unit"; updatePreview()
+                }
+                override fun onStartTrackingTouch(view: SeekBar?) {}
+                override fun onStopTrackingTouch(view: SeekBar?) {}
+            })
+            box.addView(seek)
+            refreshers += { seek.progress = get().coerceIn(min, max) - min; number.text = "${get()}$unit" }
+        }
+        fun toggle(title: String, description: String, get: () -> Boolean, set: (Boolean) -> Unit) {
+            val box = card().apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            val text = LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                addView(titleText(title))
-                addView(TextView(activity).apply {
-                    text = desc
-                    textSize = 11f
-                    setTextColor(secondaryText)
-                })
+                addView(label(title, bold = true))
+                addView(label(description, 11f, secondary).apply { setPadding(0, dp(4), dp(8), 0) })
             }
-            val sw = Switch(activity)
-            sw.isChecked = prop.get()
-            sw.setOnCheckedChangeListener { _, checked ->
-                prop.set(checked)
-                refreshPreview()
-                onChange?.invoke()
-            }
-            container.addView(label)
-            container.addView(sw)
-            scrollContent.addView(container)
-            refreshers += { sw.isChecked = prop.get() }
-        }
-
-        // ───────── 参数 ─────────
-        section("材质与通透")
-        choice("材质", listOf("常规", "高透（会压暗）"), p::material)
-        toggle("自适应明暗染色", "开启后亮背景会被压灰，想通透就关掉", p::adaptiveTint)
-        choice("染色色调", listOf("白", "黑", "蓝", "红"), p::tintColor)
-        slider("染色强度", "%", 0, 60, p::tintStrength)
-        slider("背景模糊（0 = 关闭）", "%", 0, 30, p::blur)
-        slider("饱和度", "%", 80, 220, p::saturation)
-
-        section("折射与高光")
-        slider("折射高度", "dp", 0, 30, p::refraction)
-        slider("边缘斜面宽度", "dp", 2, 30, p::bevel)
-        slider("折射集中度（×0.1）", "", 0, 40, p::falloff)
-        slider("彩虹色散", "%", 0, 30, p::dispersion)
-        slider("边缘高光", "%", 0, 100, p::edgeHighlight)
-        slider("厚度光边（立体感）", "%", 0, 100, p::rimLight)
-        toggle("重力感应高光", "倾斜手机时光泽跟着流动", p::sensor)
-
-        section("水滴（选中指示）")
-        slider("水滴折射高度", "dp", 0, 16, p::dropRefraction)
-        slider("水滴斜面宽度", "dp", 2, 20, p::dropBevel)
-        slider("水滴色散", "%", 0, 20, p::dropDispersion)
-        slider("按住放大", "%", 100, 115, p::pressInflate)
-        slider("按住折射增强", "%", 100, 400, p::pressBoost)
-        slider("按住提亮", "%", 0, 40, p::pressLift)
-        slider("拖动果冻感", "%", 0, 100, p::dragJelly)
-        slider("撞墙挤压", "%", 0, 100, p::wallSquash)
-
-        section("投影")
-        slider("投影强度（0 = 关）", "%", 0, 60, p::shadowStrength)
-        slider("投影模糊", "dp", 4, 40, p::shadowBlur)
-        slider("投影下移", "dp", 0, 16, p::shadowOffset)
-
-        section("文字与外形")
-        choice("文字配色", listOf("自动", "深色字", "浅色字"), p::textMode)
-        choice("选中文字色", listOf("自动", "蓝", "红", "橙"), p::selectedColor)
-        slider("文字大小", "sp", 10, 18, p::textSize)
-        slider("胶囊高度", "dp", 40, 72, p::pillHeight)
-        slider("左右边距", "dp", 0, 60, p::pillMarginH)
-        slider("底边距", "dp", 0, 48, p::pillMarginBottom)
-
-        // ───────── 开发者模式 ─────────
-        val devViews = mutableListOf<View>()
-        fun syncDev() { devViews.forEach { it.visibility = if (p.devMode) View.VISIBLE else View.GONE } }
-        section("开发者")
-        toggle("开发者模式", "显示更多库的细项参数", p::devMode) { syncDev() }
-        val devStart = scrollContent.childCount
-        section("库的细项（开发者）")
-        slider("胶囊圆角（0 = 全圆）", "dp", 0, 40, p::cornerDp)
-        toggle("折射不翻折", "边缘只拉伸延展，不出现压缩镜像环", p::noFold)
-        toggle("外向折射（凸透镜）", "边缘把形状外的背景弯进来，更像厚玻璃", p::outward)
-        slider("边缘柔化", "dp", 0, 12, p::edgeSoft)
-        toggle("尺寸自适应缩放", "小控件按短边自动收斜面/折射，关掉则原样渲染", p::adaptiveScale)
-        toggle("边缘高光（白边）", "贴边那圈白色细亮线；强度见上面的「边缘高光」", p::edgeOn)
-        toggle("强制完整效果", "系统开了「高对比度文字」时也不退化成不透明", p::a11yFull)
-        toggle("背景持续刷新", "最耗电的一项（每帧重绘）。关掉后只在滚动/触摸时重绘；页面里有动画、轮播、视频时玻璃后面不会实时更新", p::dynamicBg)
-        toggle("玻璃诊断日志", "每 3 秒一行帧率 + 底栏文字/红点变动追踪 + 护眼命中次数。需同时开启设置里的「开启调试日志」；平时请关着，否则会刷屏并持续写日志文件", p::diagLog)
-        for (i in devStart until scrollContent.childCount) devViews += scrollContent.getChildAt(i)
-        syncDev()
-
-        val scrollView = ScrollView(activity).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
-            )
-            addView(scrollContent)
-        }
-        root.addView(scrollView)
-
-        // ───────── 按钮栏 ─────────
-        val btnRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
-            setPadding(0, dp(10), 0, 0)
-        }
-        val resetBtn = TextView(activity).apply {
-            text = "恢复默认"
-            textSize = 14f
-            setTextColor(secondaryText)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            setOnClickListener {
-                p.copyFrom(GlassStyle.defaults())
-                refreshers.forEach { it() }
-                refreshPreview()
-                Toast.makeText(activity, "已恢复默认（通透调校）", Toast.LENGTH_SHORT).show()
-            }
-        }
-        val undoBtn = TextView(activity).apply {
-            text = "撤销本次"
-            textSize = 14f
-            setTextColor(secondaryText)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            setOnClickListener {
-                p.copyFrom(snapshot)
-                refreshers.forEach { it() }
-                refreshPreview()
-                Toast.makeText(activity, "已撤销到打开面板时的状态", Toast.LENGTH_SHORT).show()
-            }
-        }
-        val saveBtn = TextView(activity).apply {
-            text = if (liveBar != null) "完成" else "保存并生效"
-            textSize = 14f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                setColor(accentRed)
-                cornerRadius = dp(10).toFloat()
-            }
-            setPadding(dp(18), dp(8), dp(18), dp(8))
-            setOnClickListener {
-                GlassStyle.save(p)
-                if (liveBar == null) {
-                    Toast.makeText(activity, "参数已保存，返回首页即生效", Toast.LENGTH_SHORT).show()
+            box.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
+            val switch = Switch(activity).apply {
+                contentDescription = title
+                thumbTintList = ColorStateList.valueOf(accent)
+                setOnCheckedChangeListener { _, checked ->
+                    if (!syncing) { set(checked); updatePreview() }
                 }
-                onApplied?.invoke()
-                dialog.dismiss()
             }
+            box.addView(switch); refreshers += { switch.isChecked = get() }
         }
-        btnRow.addView(resetBtn)
-        if (liveBar != null) btnRow.addView(undoBtn)
-        btnRow.addView(saveBtn)
-        root.addView(btnRow)
 
+        // 日夜选择固定在预览下方，修改哪一套配色始终可见。
+        choice("", { listOf("日间配色", "夜间配色") }, { if (previewNight) 1 else 0 }, { previewNight = it == 1 })
+        val profilePicker = content.getChildAt(0)
+        content.removeView(profilePicker)
+        root.addView(profilePicker)
+        section("材质")
+        choice("磨砂强度", { listOf("轻透", "柔雾") }, { p.finish }, { p.finish = it })
+        choice("边缘高光", { listOf("通透", "标准", "明显") }, { p.edge }, { p.edge = it })
+        val profileTitle = section("")
+        refreshers += { profileTitle.text = if (previewNight) "夜间 · 独立保存" else "日间 · 独立保存" }
+        choice("玻璃底色", {
+            if (previewNight) listOf("黑色", "蓝灰", "深紫") else listOf("白色", "暖白", "冰蓝")
+        }, { palette().tone }, { palette().tone = it })
+        slider("玻璃浓度", 8, 55, "%", { palette().opacity }, { palette().opacity = it })
+        choice("选中颜色", {
+            if (previewNight) listOf("柔白", "冰蓝", "浅珊瑚") else listOf("墨色", "蓝色", "珊瑚")
+        }, { palette().accent }, { palette().accent = it })
+
+        val more = label("尺寸与更多  +", 13f, accent, true).apply {
+            gravity = Gravity.CENTER; setPadding(0, dp(14), 0, dp(14))
+        }
+        content.addView(more)
+        val moreStart = content.childCount
+        slider("底栏高度", 60, 76, " dp", { p.pillHeight }, { p.pillHeight = it })
+        slider("左右留白", 12, 40, " dp", { p.pillMarginH }, { p.pillMarginH = it })
+        slider("底部距离", 4, 28, " dp", { p.pillMarginBottom }, { p.pillMarginBottom = it })
+        toggle("持续更新背景", "视频与轮播实时透过玻璃，会增加耗电", { p.dynamicBg }, { p.dynamicBg = it })
+        toggle("玻璃诊断日志", "排查问题时使用，需同时开启总调试日志", { p.diagLog }, { p.diagLog = it })
+        val moreViews = (moreStart until content.childCount).map { content.getChildAt(it) }
+        fun syncMore() {
+            more.text = if (expanded) "收起更多  −" else "尺寸与更多  +"
+            moreViews.forEach { it.visibility = if (expanded) View.VISIBLE else View.GONE }
+        }
+        more.setOnClickListener { expanded = !expanded; syncMore() }
+        syncMore()
+        val optionsScroll = ScrollView(activity).apply {
+            isFillViewport = false
+            addView(content)
+        }
+        root.addView(optionsScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        if (activity.resources.displayMetrics.heightPixels / density < 600f) {
+            // 小屏或横屏时让预览一起滚动，给操作区域留空间。
+            root.removeView(optionsScroll)
+            optionsScroll.removeView(content)
+            val body = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+            while (root.childCount > 0) {
+                val child = root.getChildAt(0)
+                root.removeView(child); body.addView(child)
+            }
+            body.addView(content)
+            root.addView(ScrollView(activity).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
+
+        val footer = LinearLayout(activity).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        fun button(title: String, primary: Boolean = false, action: () -> Unit): TextView =
+            label(title, 14f, if (primary) if (dark) 0xFF152438.toInt() else Color.WHITE else secondary, true).apply {
+                gravity = Gravity.CENTER; minHeight = dp(44)
+                background = rounded(if (primary) accent else Color.TRANSPARENT, 12)
+                setOnClickListener { action() }
+                footer.addView(this, LinearLayout.LayoutParams(0, -2, 1f))
+            }
+        button("取消") { dialog.dismiss() }
+        button("重置") {
+            p.copyFrom(GlassStyle.defaults()); sync()
+            Toast.makeText(activity, "已恢复日间与夜间默认外观，保存后生效", Toast.LENGTH_SHORT).show()
+        }
+        button("保存", true) {
+            GlassStyle.save(p); saved = true
+            if (onApplied != null) onApplied() else LiquidGlassHooks.refreshFromSettings()
+            dialog.dismiss()
+        }
+        root.addView(footer)
+        dialog.setOnDismissListener {
+            // 取消、返回键和点外部关闭均不保存；实时预览恢复到已保存外观。
+            if (!saved && liveBar != null) LiquidGlassHooks.refreshFromSettings()
+            parent?.show()
+        }
+        if (liveBar != null) parent?.hide()
+        sync()
         dialog.setContentView(root)
         dialog.show()
         dialog.window?.apply {
             setBackgroundDrawableResource(android.R.color.transparent)
-            if (liveBar != null) {
-                // 全宽、铺到状态栏下面贴住屏幕最顶，高度约占屏幕 69%，下面留出约 1/3 让页面能照常滑动；
-                // 面板外的触摸直接落到下面的页面
-                setGravity(Gravity.TOP or Gravity.CENTER_HORIZONTAL)
-                addFlags(
-                    android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                        android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                )
-                setLayout(ViewGroup.LayoutParams.MATCH_PARENT, (dm.heightPixels * 0.69f).toInt())
-                clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-                setFlags(
-                    android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                    android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                )
-                attributes = attributes.apply { y = 0 }
-                // 窗口真正的屏幕位置要显示出来才量得到：按底栏顶边反推高度，并给状态栏让出顶部内边距
-                root.post {
-                    try {
-                        val barLoc = IntArray(2)
-                        liveBar.getLocationOnScreen(barLoc)
-                        val rootLoc = IntArray(2)
-                        root.getLocationOnScreen(rootLoc)
-                        // 目标下沿 = 屏幕 69%，但绝不盖住真实底栏
-                        val bottom = minOf((dm.heightPixels * 0.69f).toInt(), barLoc[1] - dp(6))
-                        val h = (bottom - rootLoc[1]).coerceAtLeast(dp(260))
-                        setLayout(ViewGroup.LayoutParams.MATCH_PARENT, h)
-                        val sbId = activity.resources.getIdentifier("status_bar_height", "dimen", "android")
-                        val sb = if (sbId > 0) activity.resources.getDimensionPixelSize(sbId) else 0
-                        val need = (sb - rootLoc[1]).coerceAtLeast(0)
-                        root.setPadding(root.paddingLeft, dp(14) + need, root.paddingRight, root.paddingBottom)
-                    } catch (_: Throwable) {}
-                }
-            } else {
-                setLayout(dm.widthPixels - dp(16), (dm.heightPixels * 0.9f).toInt())
-            }
+            val metrics = activity.resources.displayMetrics
+            setLayout(minOf(metrics.widthPixels - dp(24), dp(480)), (metrics.heightPixels * 0.88f).toInt())
+            setGravity(Gravity.CENTER)
         }
     }
 
-    /** 预览用背景：文字 + 色块 + 条纹，提供足够的高频细节让折射看得出来 */
-    private class PreviewBackdrop(context: Context) : View(context) {
-        var mode = 0 // 0 浅色 / 1 深色 / 2 彩色
-        var phase = 0f // 0..1 循环，驱动背景滚动
-        private val d = context.resources.displayMetrics.density
+    /** 简化的信息流场景；手动滚动，不在面板中常驻运行动画。 */
+    private class PreviewScene(context: Context) : View(context) {
+        var night = false
+        var onMoved: (() -> Unit)? = null
+        private var offset = 0f
+        private var lastY = 0f
+        private val d = resources.displayMetrics.density
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private var gradient: Shader? = null
+        private val bounds = RectF()
+        private val tile = LinearGradient(0f, 0f, 160f * d, 160f * d,
+            intArrayOf(0xFF84B6B0.toInt(), 0xFF8CA7CF.toInt(), 0xFFD4A7A9.toInt()), null, Shader.TileMode.CLAMP)
 
-        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-            gradient = LinearGradient(
-                0f, 0f, w.toFloat(), h.toFloat(),
-                intArrayOf(0xFFFF9A9E.toInt(), 0xFFA18CFF.toInt(), 0xFF5EC8FF.toInt()),
-                null, Shader.TileMode.CLAMP
-            )
+        override fun onDraw(canvas: Canvas) {
+            canvas.drawColor(if (night) 0xFF14171D.toInt() else 0xFFF0F3F8.toInt())
+            canvas.save()
+            canvas.clipRect(0f, 35f * d, width.toFloat(), height.toFloat())
+            for (i in -1..3) {
+                val y = (42f + i * 72f + offset) * d
+                bounds.set(14f * d, y, width - 14f * d, y + 60f * d)
+                paint.color = if (night) 0xFF252B35.toInt() else Color.WHITE
+                canvas.drawRoundRect(bounds, 12f * d, 12f * d, paint)
+                paint.shader = tile
+                bounds.set(21f * d, y + 7f * d, 67f * d, y + 53f * d)
+                canvas.drawRoundRect(bounds, 8f * d, 8f * d, paint)
+                paint.shader = null
+                paint.color = if (night) 0xFFD2D8E3.toInt() else 0xFF465369.toInt()
+                paint.textSize = 12f * d
+                canvas.drawText(if (i % 2 == 0) "下一站，新的冒险" else "收藏生活里的小发现", 79f * d, y + 25f * d, paint)
+                paint.color = if (night) 0xFF626E81.toInt() else 0xFFC2CBD8.toInt()
+                bounds.set(79f * d, y + 35f * d, width - 35f * d, y + 39f * d)
+                canvas.drawRoundRect(bounds, 2f * d, 2f * d, paint)
+            }
+            canvas.restore()
+            paint.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            paint.textSize = 12f * d
+            paint.color = if (night) 0xFFAEB7C8.toInt() else 0xFF6E7D92.toInt()
+            canvas.drawText(if (night) "夜间 / 安静一点" else "日间 / 轻盈一点", 16f * d, 25f * d, paint)
         }
 
-        override fun onDraw(c: Canvas) {
-            val w = width.toFloat()
-            val h = height.toFloat()
-            when (mode) {
-                0 -> c.drawColor(0xFFF4F4F6.toInt())
-                1 -> c.drawColor(0xFF1C1C1E.toInt())
-                else -> {
-                    paint.shader = gradient
-                    c.drawRect(0f, 0f, w, h, paint)
-                    paint.shader = null
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { lastY = event.y; parent?.requestDisallowInterceptTouchEvent(true) }
+                MotionEvent.ACTION_MOVE -> {
+                    offset = (offset + (event.y - lastY) / d) % 72f
+                    lastY = event.y; invalidate(); onMoved?.invoke()
                 }
+                MotionEvent.ACTION_UP -> { parent?.requestDisallowInterceptTouchEvent(false); performClick() }
+                MotionEvent.ACTION_CANCEL -> parent?.requestDisallowInterceptTouchEvent(false)
             }
-            val ink = when (mode) { 0 -> 0xFF222222.toInt(); 1 -> 0xFFE5E5EA.toInt(); else -> Color.WHITE }
-            val block = when (mode) { 0 -> 0xFFDADAE0.toInt(); 1 -> 0xFF3A3A3C.toInt(); else -> 0x55FFFFFF }
-
-            val period = 22 * d
-            val shift = phase * period
-            // 竖条纹（横向滚动一个周期后无缝衔接）
-            paint.color = block
-            var x = 6 * d - shift
-            while (x < w) {
-                c.drawRoundRect(RectF(x, 40 * d, x + 10 * d, h), 3 * d, 3 * d, paint)
-                x += period
-            }
-            // 色块：整屏宽度循环滚动
-            val span = w + 60 * d
-            fun cx(base: Float) = ((w * base - phase * span) % span + span) % span - 30 * d
-            paint.color = 0xFFFF5252.toInt(); c.drawCircle(cx(0.18f), h * 0.62f, 16 * d, paint)
-            paint.color = 0xFF34C759.toInt(); c.drawCircle(cx(0.50f), h * 0.55f, 20 * d, paint)
-            paint.color = 0xFFFFB020.toInt(); c.drawCircle(cx(0.82f), h * 0.64f, 14 * d, paint)
-            // 文字
-            paint.color = ink
-            paint.textSize = 15 * d
-            paint.typeface = Typeface.DEFAULT_BOLD
-            c.drawText("Liquid Glass 液态玻璃 Aa 123", 12 * d - shift, 24 * d, paint)
-            c.drawText("Liquid Glass 液态玻璃 Aa 123", 12 * d - shift + 230 * d, 24 * d, paint)
+            return true
         }
+        override fun performClick(): Boolean { super.performClick(); return true }
     }
 }

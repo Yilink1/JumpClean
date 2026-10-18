@@ -1,225 +1,156 @@
 package com.yilink.jumpclean.hooks
 
-import com.example.liquidglass.GlassAccessibilityMode
+import android.content.Context
+import android.content.res.Configuration
 import com.example.liquidglass.GlassMaterial
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
 
 /**
- * 液态玻璃底栏的全部可调参数：持久化 + 应用到 [JumpGlassTabBar]。
- * 设置弹窗的预览条和主界面的真实底栏走同一个 [applyTo]，所见即所得。
+ * 底栏配置：只保存用户看得懂的选项，并且只调用库的公开 API。
  *
- * 默认值是「通透」调校：关掉自适应染色（亮背景下会被压灰）、不染色、轻模糊。
+ * 折射、斜面、色散、透镜尺寸、按压动画都由 LiquidGlassTabBar 自己决定，
+ * 这里不再保存第二套光学参数。
  */
 object GlassStyle {
+    private const val PREFIX = "lg_v4_"
 
-    val TINT_COLORS = intArrayOf(0xFFFFFFFF.toInt(), 0xFF000000.toInt(), 0xFF0A84FF.toInt(), 0xFFFF453A.toInt())
-    val SELECTED_COLORS = arrayOf<Int?>(null, 0xFF007AFF.toInt(), 0xFFFF5252.toInt(), 0xFFFF9500.toInt())
+    class Palette(var tone: Int = 0, var opacity: Int = 44, var accent: Int = 0) {
+        fun copyFrom(other: Palette) {
+            tone = other.tone
+            opacity = other.opacity
+            accent = other.accent
+        }
+    }
 
     class Params {
-        var material = 0          // 0 常规 / 1 高透
-        var adaptiveTint = false  // 库的自适应明暗染色（亮背景会压灰）
-        var tintColor = 0         // TINT_COLORS 下标
-        var tintStrength = 0      // %
-        var blur = 3              // %（0 = 关闭背景模糊）
-        var saturation = 130      // %
-        var refraction = 14       // dp
-        var bevel = 14            // dp
-        var falloff = 20          // ×0.1
-        var dispersion = 6        // %
-        var edgeHighlight = 100   // %
-        var sensor = true
-        var textMode = 0          // 0 自动采样 / 1 深色字 / 2 浅色字
-        var selectedColor = 0     // SELECTED_COLORS 下标
-        var textSize = 13         // sp
-        var pillHeight = 52       // dp
-        var pillMarginH = 28      // dp
-        var pillMarginBottom = 16 // dp
-        var dropRefraction = 5    // dp
-        var dropBevel = 9         // dp
-        var dropDispersion = 4    // %
-        var pressInflate = 108    // %
-        var pressBoost = 220      // %
-        var pressLift = 10        // %
+        val day = Palette(opacity = 44)
+        val night = Palette(opacity = 42)
+        var finish = 0      // 0 轻透 / 1 柔雾
+        var edge = 1        // 0 通透 / 1 标准 / 2 明显
+        var dynamicBg = false
+        var diagLog = false
+        var pillHeight = 64
+        var pillMarginH = 24
+        var pillMarginBottom = 12
+        val shadowBlur = 16
+        val shadowOffset = 4
+        val cornerDp = 0
 
-        // —— 投影 / 页面留白 ——
-        var shadowStrength = 22   // %，0 = 关
-        var shadowBlur = 16       // dp
-        var shadowOffset = 5      // dp
-        var diagLog = false       // 玻璃诊断日志（帧率 / 底栏变动追踪 / 护眼命中），需配合总调试日志
-
-        // —— 开发者模式 ——
-        var devMode = false
-        var cornerDp = 0          // 0 = 全圆胶囊
-        var noFold = false
-        var outward = false
-        var edgeSoft = 0          // dp
-        var adaptiveScale = true
-        var edgeOn = true
-        var a11yFull = false
-        var dynamicBg = true      // 背景持续刷新（每帧重绘，最耗电的一项）
-        var rimLight = 35         // %，厚度光边（外缘渐变亮线 + 内缘暗线 + 顶部高光）
-        var dragJelly = 60        // %，拖动时水滴随速度拉伸/压扁
-        var wallSquash = 60       // %，拖过两端时水滴被墙压扁
-
-        fun copyFrom(o: Params) {
-            material = o.material; adaptiveTint = o.adaptiveTint
-            tintColor = o.tintColor; tintStrength = o.tintStrength
-            blur = o.blur; saturation = o.saturation
-            refraction = o.refraction; bevel = o.bevel; falloff = o.falloff
-            dispersion = o.dispersion; edgeHighlight = o.edgeHighlight; sensor = o.sensor
-            textMode = o.textMode; selectedColor = o.selectedColor; textSize = o.textSize
-            pillHeight = o.pillHeight; pillMarginH = o.pillMarginH; pillMarginBottom = o.pillMarginBottom
-            dropRefraction = o.dropRefraction; dropBevel = o.dropBevel; dropDispersion = o.dropDispersion
-            pressInflate = o.pressInflate; pressBoost = o.pressBoost; pressLift = o.pressLift
-            shadowStrength = o.shadowStrength; shadowBlur = o.shadowBlur; shadowOffset = o.shadowOffset
-            diagLog = o.diagLog
-            devMode = o.devMode; cornerDp = o.cornerDp
-            noFold = o.noFold; outward = o.outward; edgeSoft = o.edgeSoft
-            adaptiveScale = o.adaptiveScale; edgeOn = o.edgeOn; a11yFull = o.a11yFull
-            dynamicBg = o.dynamicBg; rimLight = o.rimLight; dragJelly = o.dragJelly; wallSquash = o.wallSquash
+        fun copyFrom(other: Params) {
+            day.copyFrom(other.day)
+            night.copyFrom(other.night)
+            finish = other.finish
+            edge = other.edge
+            dynamicBg = other.dynamicBg
+            diagLog = other.diagLog
+            pillHeight = other.pillHeight
+            pillMarginH = other.pillMarginH
+            pillMarginBottom = other.pillMarginBottom
         }
     }
 
     fun defaults() = Params()
 
-    fun load(): Params {
-        val d = Params()
-        return Params().apply {
-            material = i("lg_material", d.material)
-            adaptiveTint = ConfigManager.getBooleanPref("lg_adaptive_tint", d.adaptiveTint)
-            tintColor = i("lg_tint_color", d.tintColor).coerceIn(0, TINT_COLORS.size - 1)
-            tintStrength = i("lg_tint_strength", d.tintStrength)
-            blur = i("lg_blur", d.blur)
-            saturation = i("lg_saturation", d.saturation)
-            // 以下四项沿用旧版的 key，已保存过的值继续有效
-            refraction = i(JumpConstants.KEY_LIQUID_GLASS_REFRACTION, d.refraction)
-            bevel = i(JumpConstants.KEY_LIQUID_GLASS_BEVEL, d.bevel)
-            dispersion = i(JumpConstants.KEY_LIQUID_GLASS_DISPERSION, d.dispersion)
-            sensor = ConfigManager.getBooleanPref(JumpConstants.KEY_LIQUID_GLASS_SENSOR, d.sensor)
-            falloff = i("lg_falloff", d.falloff)
-            edgeHighlight = i("lg_edge_highlight", d.edgeHighlight)
-            textMode = i("lg_text_mode", d.textMode).coerceIn(0, 2)
-            selectedColor = i("lg_selected_color", d.selectedColor).coerceIn(0, SELECTED_COLORS.size - 1)
-            textSize = i("lg_text_size", d.textSize)
-            pillHeight = i("lg_pill_height", d.pillHeight)
-            pillMarginH = i("lg_pill_margin_h", d.pillMarginH)
-            pillMarginBottom = i("lg_pill_margin_bottom", d.pillMarginBottom)
-            dropRefraction = i("lg_drop_refraction", d.dropRefraction)
-            dropBevel = i("lg_drop_bevel", d.dropBevel)
-            dropDispersion = i("lg_drop_dispersion", d.dropDispersion)
-            pressInflate = i("lg_press_inflate", d.pressInflate)
-            pressBoost = i("lg_press_boost", d.pressBoost)
-            pressLift = i("lg_press_lift", d.pressLift)
-            shadowStrength = i("lg_shadow_strength", d.shadowStrength)
-            shadowBlur = i("lg_shadow_blur", d.shadowBlur)
-            shadowOffset = i("lg_shadow_offset", d.shadowOffset)
-            diagLog = ConfigManager.getBooleanPref("lg_diag", d.diagLog)
-            devMode = ConfigManager.getBooleanPref("lg_dev_mode", d.devMode)
-            cornerDp = i("lg_corner", d.cornerDp)
-            noFold = ConfigManager.getBooleanPref("lg_no_fold", d.noFold)
-            outward = ConfigManager.getBooleanPref("lg_outward", d.outward)
-            edgeSoft = i("lg_edge_soft", d.edgeSoft)
-            adaptiveScale = ConfigManager.getBooleanPref("lg_adaptive_scale", d.adaptiveScale)
-            edgeOn = ConfigManager.getBooleanPref("lg_edge_on", d.edgeOn)
-            a11yFull = ConfigManager.getBooleanPref("lg_a11y_full", d.a11yFull)
-            dynamicBg = ConfigManager.getBooleanPref("lg_dynamic_bg", d.dynamicBg)
-            rimLight = i("lg_rim", d.rimLight)
-            dragJelly = i("lg_jelly", d.dragJelly)
-            wallSquash = i("lg_wall", d.wallSquash)
+    fun isNight(context: Context): Boolean =
+        context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+            Configuration.UI_MODE_NIGHT_YES
+
+    fun load(): Params = Params().apply {
+        // v4 使用独立 key：v3 里遗留的自绘光学参数不再影响新外观。
+        fun palette(name: String, target: Palette) {
+            target.tone = i("${name}_tone", target.tone).coerceIn(0, 2)
+            target.opacity = i("${name}_opacity", target.opacity).coerceIn(8, 55)
+            target.accent = i("${name}_accent", target.accent).coerceIn(0, 2)
         }
+        palette("day", day)
+        palette("night", night)
+        finish = i("finish", finish).coerceIn(0, 1)
+        edge = i("edge", edge).coerceIn(0, 2)
+        dynamicBg = ConfigManager.getBooleanPref(PREFIX + "dynamic", dynamicBg)
+        diagLog = ConfigManager.getBooleanPref("lg_diag", false)
+        pillHeight = i("pill_height", pillHeight).coerceIn(60, 76)
+        pillMarginH = i("pill_margin_h", pillMarginH).coerceIn(12, 40)
+        pillMarginBottom = i("pill_margin_bottom", pillMarginBottom).coerceIn(4, 28)
     }
 
-    /**
-     * 玻璃诊断输出（每 3 秒一行帧率、底栏文字/红点变动追踪、护眼命中次数）。
-     * 必须「开启调试日志」总开关 + 玻璃面板里的「玻璃诊断日志」同时开启：
-     * 它每 3 秒写一行，会把 200 行日志缓冲冲掉，还会持续写日志文件，所以不能跟着总开关默认输出。
-     */
+    fun save(p: Params) {
+        val context = ConfigManager.getValidAppContext() ?: return
+        val edit = context.getSharedPreferences(JumpConstants.PREFS_NAME, Context.MODE_PRIVATE).edit()
+        fun palette(name: String, value: Palette) {
+            edit.putInt(PREFIX + "${name}_tone", value.tone.coerceIn(0, 2))
+            edit.putInt(PREFIX + "${name}_opacity", value.opacity.coerceIn(8, 55))
+            edit.putInt(PREFIX + "${name}_accent", value.accent.coerceIn(0, 2))
+        }
+        palette("day", p.day)
+        palette("night", p.night)
+        edit.putInt(PREFIX + "finish", p.finish.coerceIn(0, 1))
+            .putInt(PREFIX + "edge", p.edge.coerceIn(0, 2))
+            .putBoolean(PREFIX + "dynamic", p.dynamicBg)
+            .putBoolean("lg_diag", p.diagLog)
+            .putInt(PREFIX + "pill_height", p.pillHeight.coerceIn(60, 76))
+            .putInt(PREFIX + "pill_margin_h", p.pillMarginH.coerceIn(12, 40))
+            .putInt(PREFIX + "pill_margin_bottom", p.pillMarginBottom.coerceIn(4, 28))
+            .apply()
+    }
+
     fun devTrace(): Boolean =
         ConfigManager.getBooleanPref(JumpConstants.KEY_ENABLE_DEBUG_LOG, false) &&
             ConfigManager.getBooleanPref("lg_diag", false)
 
-    fun save(p: Params) {
-        ConfigManager.setIntPref("lg_material", p.material)
-        ConfigManager.setBooleanPref("lg_adaptive_tint", p.adaptiveTint)
-        ConfigManager.setIntPref("lg_tint_color", p.tintColor)
-        ConfigManager.setIntPref("lg_tint_strength", p.tintStrength)
-        ConfigManager.setIntPref("lg_blur", p.blur)
-        ConfigManager.setIntPref("lg_saturation", p.saturation)
-        ConfigManager.setIntPref(JumpConstants.KEY_LIQUID_GLASS_REFRACTION, p.refraction)
-        ConfigManager.setIntPref(JumpConstants.KEY_LIQUID_GLASS_BEVEL, p.bevel)
-        ConfigManager.setIntPref(JumpConstants.KEY_LIQUID_GLASS_DISPERSION, p.dispersion)
-        ConfigManager.setBooleanPref(JumpConstants.KEY_LIQUID_GLASS_SENSOR, p.sensor)
-        ConfigManager.setIntPref("lg_falloff", p.falloff)
-        ConfigManager.setIntPref("lg_edge_highlight", p.edgeHighlight)
-        ConfigManager.setIntPref("lg_text_mode", p.textMode)
-        ConfigManager.setIntPref("lg_selected_color", p.selectedColor)
-        ConfigManager.setIntPref("lg_text_size", p.textSize)
-        ConfigManager.setIntPref("lg_pill_height", p.pillHeight)
-        ConfigManager.setIntPref("lg_pill_margin_h", p.pillMarginH)
-        ConfigManager.setIntPref("lg_pill_margin_bottom", p.pillMarginBottom)
-        ConfigManager.setIntPref("lg_drop_refraction", p.dropRefraction)
-        ConfigManager.setIntPref("lg_drop_bevel", p.dropBevel)
-        ConfigManager.setIntPref("lg_drop_dispersion", p.dropDispersion)
-        ConfigManager.setIntPref("lg_press_inflate", p.pressInflate)
-        ConfigManager.setIntPref("lg_press_boost", p.pressBoost)
-        ConfigManager.setIntPref("lg_press_lift", p.pressLift)
-        ConfigManager.setIntPref("lg_shadow_strength", p.shadowStrength)
-        ConfigManager.setIntPref("lg_shadow_blur", p.shadowBlur)
-        ConfigManager.setIntPref("lg_shadow_offset", p.shadowOffset)
-        ConfigManager.setBooleanPref("lg_diag", p.diagLog)
-        ConfigManager.setBooleanPref("lg_dev_mode", p.devMode)
-        ConfigManager.setIntPref("lg_corner", p.cornerDp)
-        ConfigManager.setBooleanPref("lg_no_fold", p.noFold)
-        ConfigManager.setBooleanPref("lg_outward", p.outward)
-        ConfigManager.setIntPref("lg_edge_soft", p.edgeSoft)
-        ConfigManager.setBooleanPref("lg_adaptive_scale", p.adaptiveScale)
-        ConfigManager.setBooleanPref("lg_edge_on", p.edgeOn)
-        ConfigManager.setBooleanPref("lg_a11y_full", p.a11yFull)
-        ConfigManager.setBooleanPref("lg_dynamic_bg", p.dynamicBg)
-        ConfigManager.setIntPref("lg_rim", p.rimLight)
-        ConfigManager.setIntPref("lg_jelly", p.dragJelly)
-        ConfigManager.setIntPref("lg_wall", p.wallSquash)
+    fun tintColor(palette: Palette, night: Boolean): Int = if (night) {
+        when (palette.tone) {
+            1 -> 0xFF1A2638.toInt()
+            2 -> 0xFF282034.toInt()
+            else -> 0xFF0B0D12.toInt()
+        }
+    } else {
+        when (palette.tone) {
+            1 -> 0xFFFFF6EA.toInt()
+            2 -> 0xFFE8F3FF.toInt()
+            else -> 0xFFFFFFFF.toInt()
+        }
     }
 
-    /** 把参数应用到底栏（不含外形尺寸：胶囊高度/边距由 LayoutParams 决定，见 LiquidGlassHooks.pillParams） */
-    fun applyTo(bar: JumpGlassTabBar, p: Params, density: Float) {
-        val dpf = { v: Int -> v * density }
+    fun accentColor(palette: Palette, night: Boolean): Int = when (palette.accent) {
+        1 -> if (night) 0xFF8FC4FF.toInt() else 0xFF1769BE.toInt()
+        2 -> if (night) 0xFFFFACA3.toInt() else 0xFFB93F3D.toInt()
+        else -> if (night) 0xFFF0F2F7.toInt() else 0xFF202633.toInt()
+    }
+
+    fun normalTextColor(night: Boolean): Int =
+        if (night) 0xD0E8EDF7.toInt() else 0xC03A4252.toInt()
+
+    fun shadowStrength(night: Boolean): Float = if (night) 0.36f else 0.30f
+
+    fun edgeHighlightOpacity(preset: Int, night: Boolean): Float = when (preset.coerceIn(0, 2)) {
+        0 -> if (night) 42f else 58f
+        2 -> 100f
+        else -> if (night) 62f else 82f
+    }
+
+    /** 唯一把配置作用到真实底栏的入口。 */
+    fun apply(bar: GlassTabBar, p: Params, previewNight: Boolean? = null) {
+        val night = previewNight ?: isNight(bar.context)
+        val palette = if (night) p.night else p.day
+        // REGULAR + 明确的 tint：避免 CLEAR 自带的压暗层让白天发灰。
+        bar.material = GlassMaterial.REGULAR
+        bar.enableAdaptiveTint = false
+        bar.enableBackdropBlur = true
+        // 库在 overLight=true 时会额外压 20% 黑（亮背景保文字对比）。
+        // 我们要的是白色玻璃，所以走材质自带的白色底 tint；模糊半径用 blurAmount 补回来。
+        bar.overLight = false
+        bar.blurAmount = if (p.finish == 1) 0.50f else 0.42f
+        bar.saturation = if (night) 108f else 118f
+        bar.enableEdgeHighlight = true
+        bar.edgeHighlightOpacity = edgeHighlightOpacity(p.edge, night)
+        bar.cornerRadius = 999f
         bar.enableDynamicBackground = p.dynamicBg
-        bar.material = if (p.material == 1) GlassMaterial.CLEAR else GlassMaterial.REGULAR
-        bar.enableAdaptiveTint = p.adaptiveTint
-        bar.enableSensorHighlight = p.sensor
-        bar.enableBackdropBlur = p.blur > 0
-        bar.blurAmount = p.blur / 100f
-        bar.saturation = p.saturation.toFloat()
-        bar.refractionHeight = dpf(p.refraction)
-        bar.bevelWidth = dpf(p.bevel)
-        bar.refractionFalloff = p.falloff / 10f
-        bar.dispersionStrength = p.dispersion / 100f
-        bar.edgeHighlightOpacity = p.edgeHighlight.toFloat()
-        bar.enableEdgeHighlight = p.edgeOn
-        bar.refractionNoFold = p.noFold
-        bar.refractionOutward = p.outward
-        bar.edgeSoftness = dpf(p.edgeSoft)
-        bar.adaptiveLensScale = p.adaptiveScale
-        bar.accessibilityMode = if (p.a11yFull) GlassAccessibilityMode.FORCE_FULL else GlassAccessibilityMode.AUTO
-        bar.cornerRadius = if (p.cornerDp <= 0) 999f else dpf(p.cornerDp)
-        bar.rimStrength = p.rimLight / 100f
-        bar.dragJelly = p.dragJelly / 100f
-        bar.wallSquash = p.wallSquash / 100f
-        bar.setGlassTint(TINT_COLORS[p.tintColor], p.tintStrength / 100f)
-        bar.selectedTintColor = SELECTED_COLORS[p.selectedColor]
-        bar.configureDroplet(
-            refractionPx = dpf(p.dropRefraction),
-            bevelPx = dpf(p.dropBevel),
-            dispersion = p.dropDispersion / 100f,
-            inflate = p.pressInflate / 100f,
-            boost = p.pressBoost / 100f,
-            lift = p.pressLift / 100f
-        )
-        bar.textMode = p.textMode
-        bar.setLabelTextSize(p.textSize.toFloat())
+        bar.setGlassTint(tintColor(palette, night), palette.opacity.coerceIn(8, 55) / 100f)
+        bar.selectedTintColor = accentColor(palette, night)
+        bar.setLabelColors(accentColor(palette, night), normalTextColor(night))
+        bar.invalidate()
     }
 
-    private fun i(key: String, def: Int) = ConfigManager.getIntPref(key, def)
+    private fun i(key: String, default: Int) = ConfigManager.getIntPref(PREFIX + key, default)
 }

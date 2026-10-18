@@ -54,8 +54,7 @@ object LiquidGlassHooks {
 
         // ── WebView 一创建就开硬件层（库文档：玻璃背景里的 WebView 必须有硬件层，否则静止也每帧重绘→闪烁/白条）。
         //    只处理 MainActivity 里的 WebView，其它页面（文章页等）不动。
-        //    同时登记弱引用：① 运行中才打开玻璃时补开硬件层 ② 供文字明暗采样判断「有没有可见 WebView」，
-        //    不再靠周期性遍历整棵 View 树去找 ──
+        //    同时登记弱引用，供运行中打开玻璃时补开硬件层。文字颜色直接跟随主题，无需软件采样。
         try {
             XposedBridge.hookAllConstructors(android.webkit.WebView::class.java, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
@@ -138,6 +137,20 @@ object LiquidGlassHooks {
                 }
             )
 
+            XposedHelpers.findAndHookMethod(
+                Activity::class.java,
+                "onConfigurationChanged",
+                android.content.res.Configuration::class.java,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val activity = param.thisObject as? Activity ?: return
+                        if (!mainActivityClass.isInstance(activity)) return
+                        activity.window?.decorView?.post {
+                            runSafe("themeChanged") { applyLiquidGlass(activity, lpparam.classLoader) }
+                        }
+                    }
+                }
+            )
             ConfigManager.log("[Hook] 液态玻璃视觉调度器已加载")
         } catch (t: Throwable) {
             ConfigManager.logError("[LiquidGlass] Hook 总线异常", t)
@@ -166,7 +179,7 @@ object LiquidGlassHooks {
     }
 
     /** 当前 Activity 里的真实玻璃底栏（不在主页则为 null） */
-    fun pillOf(activity: Activity): JumpGlassTabBar? = findGlassPill(activity)
+    fun pillOf(activity: Activity): GlassTabBar? = findGlassPill(activity)
 
     /**
      * 把一组「未保存」的参数直接作用到真实底栏，设置面板拖滑块时实时看效果。
@@ -176,12 +189,19 @@ object LiquidGlassHooks {
         try {
             val pill = findGlassPill(activity) ?: return
             val frame = activity.findViewById<FrameLayout>(android.R.id.content) ?: return
-            GlassStyle.applyTo(pill, s, activity.resources.displayMetrics.density)
-            pill.layoutParams = pillParams(activity, s)
-            ensureShadow(activity, frame, pill, s)
-            pill.post { pill.applyLabelStyle() }
-            pill.requestLayout()
+            val old = pill.layoutParams as? FrameLayout.LayoutParams
+            val geometryChanged = old == null || old.height != dp(activity, s.pillHeight) ||
+                old.leftMargin != dp(activity, s.pillMarginH) ||
+                old.bottomMargin != dp(activity, s.pillMarginBottom)
+            GlassStyle.apply(pill, s)
             pill.invalidate()
+            if (geometryChanged) {
+                pill.layoutParams = pillParams(activity, s)
+                ensureShadow(activity, frame, pill, s)
+                val id = HookUtils.getCachedResId(activity, "containerFra")
+                val container = activity.findViewById<ViewGroup>(id)
+                container?.post { padVisibleFragmentRV(container, contentPadPx(activity, s), true) }
+            }
         } catch (t: Throwable) {
             ConfigManager.logError("[LiquidGlass] applyStyleLive 异常", t)
         }
@@ -209,7 +229,6 @@ object LiquidGlassHooks {
         }
 
         val style = GlassStyle.load()
-        val density = activity.resources.displayMetrics.density
 
         // ── 1. 内容穿透：containerFra 全屏 ──
         if (containerFra != null) {
@@ -252,37 +271,38 @@ object LiquidGlassHooks {
             // 「隐藏 Jump 赏 / 抽奖」等开关会改变可见 Tab，必须同步到玻璃条，
             // 否则 Tab 数量、文字、点击映射都会和原底栏错位
             syncTabsIfChanged(existing, rgMainTab)
-            existing.sampleSource = containerFra
-            existing.webGuard = { hasVisibleWebView() }
+            existing.backdropSource = containerFra
             applyWebLayers()
-            GlassStyle.applyTo(existing, style, density)
+            GlassStyle.apply(existing, style)
             existing.layoutParams = pillParams(activity, style)
             ensureShadow(activity, contentFrame, existing, style)
             watchHostTabs(activity, rgMainTab)
-            existing.post { existing.applyLabelStyle() }
             existing.requestLayout()
             existing.invalidate()
             return
         }
 
-        // ── 5. 首次创建 LiquidGlassTabBar ──
-        val tabBar = JumpGlassTabBar(activity).apply {
+        // ── 5. 首次创建原生 LiquidGlassTabBar（只做配置，不做自绘） ──
+        val tabBar = GlassTabBar(activity).apply {
             tag = TAG_GLASS
             setTag(TAG_TAB_MAP, visibleTabs)
-            setTabs(visibleTabs.map { LiquidGlassTabBar.TabItem(it.first) })
+            setTabs(visibleTabs.map {
+                LiquidGlassTabBar.TabItem(it.first, TabIcons.forTitle(it.first))
+            })
 
             // 初始选中与原生底栏对齐
             val currentChecked = rgMainTab.checkedRadioButtonId
             val initIndex = visibleTabs.indexOfFirst { it.second == currentChecked }
             if (initIndex >= 0) selectedIndex = initIndex
 
-            sampleSource = containerFra
-            webGuard = { hasVisibleWebView() }
-            GlassStyle.applyTo(this, style, density)
+            backdropSource = containerFra
+            GlassStyle.apply(this, style)
 
             // 点击切页
             onTabSelected = { index ->
                 runSafe("onTabSelected") {
+                    // 库在切页时会重写文字色，这里补回当前日/夜配色。
+                    reapplyLabelColors()
                     @Suppress("UNCHECKED_CAST")
                     val tabs = (getTag(TAG_TAB_MAP) as? List<Pair<String, Int>>) ?: emptyList()
                     if (!suppressSelect && index in tabs.indices) {
@@ -302,9 +322,6 @@ object LiquidGlassHooks {
         applyWebLayers()
         ensureShadow(activity, contentFrame, tabBar, style)
         watchHostTabs(activity, rgMainTab)
-
-        // ── 7. Tab 文字大小/居中（setTabs 重建了标签，需要再套一次） ──
-        tabBar.post { tabBar.applyLabelStyle() }
 
         ConfigManager.log("[LiquidGlass] ✔ 液态水滴底栏已挂载 (${visibleTabs.size} 个 Tab)")
     }
@@ -333,10 +350,6 @@ object LiquidGlassHooks {
         }
     }
 
-    private fun hasVisibleWebView(): Boolean = synchronized(webViews) {
-        webViews.any { it.get()?.isShown == true }
-    }
-
     // ════════════════════════════════════════════════════
     //  跟随宿主底栏：文字 / 显隐变化实时同步
     // ════════════════════════════════════════════════════
@@ -350,23 +363,30 @@ object LiquidGlassHooks {
         return out
     }
 
-    private fun setSelectedQuiet(glass: JumpGlassTabBar, index: Int) {
+    private fun setSelectedQuiet(glass: GlassTabBar, index: Int) {
         suppressSelect = true
         try { glass.selectedIndex = index } finally { suppressSelect = false }
     }
 
     /** 宿主 Tab 的文字/显隐变了就重建玻璃条的标签（宿主会在接口回来后改文字，比如「买游戏」→「Jump 赏」） */
-    private fun syncTabsIfChanged(glass: JumpGlassTabBar, rg: RadioGroup) {
+    private fun syncTabsIfChanged(glass: GlassTabBar, rg: RadioGroup) {
         val now = readVisibleTabs(rg)
         if (now.isEmpty()) return
         @Suppress("UNCHECKED_CAST")
         val old = glass.getTag(TAG_TAB_MAP) as? List<Pair<String, Int>>
         if (old == now) return
+        // setTabs() 会把库内部选中项重置为 0；先记住当前选中的 host id，
+        // 重建后按 id 恢复，避免页面已经切走、透镜却跳回第一个 tab。
+        val previousId = old?.getOrNull(glass.selectedIndex)?.second
         glass.setTag(TAG_TAB_MAP, now)
-        glass.setTabs(now.map { LiquidGlassTabBar.TabItem(it.first) })
-        val idx = now.indexOfFirst { it.second == rg.checkedRadioButtonId }
+        glass.setTabs(now.map {
+            LiquidGlassTabBar.TabItem(it.first, TabIcons.forTitle(it.first))
+        })
+        val targetId = previousId?.takeIf { id -> now.any { it.second == id } }
+            ?: rg.checkedRadioButtonId.takeIf { id -> now.any { it.second == id } }
+        val idx = targetId?.let { id -> now.indexOfFirst { it.second == id } } ?: -1
         if (idx >= 0) setSelectedQuiet(glass, idx)
-        glass.post { glass.applyLabelStyle() }
+        glass.reapplyLabelColors()
         ConfigManager.log("[LiquidGlass] Tab 已同步: " + now.joinToString(" | ") { it.first })
     }
 
@@ -421,16 +441,12 @@ object LiquidGlassHooks {
     //  外形、投影与留白（玻璃参数见 GlassStyle）
     // ════════════════════════════════════════════════════
 
-    private fun ensureShadow(activity: Activity, frame: FrameLayout, bar: JumpGlassTabBar, s: GlassStyle.Params) {
+    private fun ensureShadow(activity: Activity, frame: FrameLayout, bar: GlassTabBar, s: GlassStyle.Params) {
         var shadow = findShadow(frame)
-        if (s.shadowStrength <= 0) {
-            if (shadow != null) frame.removeView(shadow)
-            return
-        }
         val created = shadow == null
         if (shadow == null) shadow = GlassShadowView(activity)
         val pad = shadow.configure(
-            strength = s.shadowStrength / 100f,
+            strength = GlassStyle.shadowStrength(GlassStyle.isNight(activity)),
             blurPx = dp(activity, s.shadowBlur).toFloat(),
             offsetYPx = dp(activity, s.shadowOffset).toFloat(),
             cornerPx = if (s.cornerDp <= 0) 9999f else dp(activity, s.cornerDp).toFloat()
@@ -509,7 +525,7 @@ object LiquidGlassHooks {
     // ════════════════════════════════════════════════════
 
     private fun uninstall(
-        glass: JumpGlassTabBar?, rgMainTab: RadioGroup,
+        glass: GlassTabBar?, rgMainTab: RadioGroup,
         clMainContent: ViewGroup, containerFra: View?, activity: Activity
     ) {
         if (glass == null) return
@@ -558,11 +574,11 @@ object LiquidGlassHooks {
      * 玻璃条和阴影都是 content 的直接子 View，只扫一层（几个子 View）。
      * 旧版用 findViewWithTag 会深度遍历整棵 View 树，而它在每次布局回调里都会被调用。
      */
-    private fun findGlassPill(activity: Activity): JumpGlassTabBar? {
+    private fun findGlassPill(activity: Activity): GlassTabBar? {
         val frame = activity.findViewById<ViewGroup>(android.R.id.content) ?: return null
         for (i in 0 until frame.childCount) {
             val c = frame.getChildAt(i)
-            if (c is JumpGlassTabBar) return c
+            if (c is GlassTabBar) return c
         }
         return null
     }

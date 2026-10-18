@@ -7,6 +7,8 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.Region
+import android.os.Build
 import android.view.View
 
 /**
@@ -57,7 +59,12 @@ class GlassShadowView(context: Context) : View(context) {
         glassPath.addRoundRect(glassRect, r, r, Path.Direction.CW)
 
         canvas.save()
-        canvas.clipOutPath(glassPath)
+        if (Build.VERSION.SDK_INT >= 26) {
+            canvas.clipOutPath(glassPath)
+        } else {
+            @Suppress("DEPRECATION")
+            canvas.clipPath(glassPath, Region.Op.DIFFERENCE)
+        }
         paint.color = Color.argb((strength * 255f).toInt().coerceIn(0, 255), 0, 0, 0)
         canvas.drawRoundRect(
             glassRect.left, glassRect.top + offsetY, glassRect.right, glassRect.bottom + offsetY,

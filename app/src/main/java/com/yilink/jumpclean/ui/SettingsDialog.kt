@@ -130,9 +130,9 @@ object SettingsDialog {
             SettingItem(
                 JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV,
                 "底栏液态玻璃 (实验性)",
-                desc = "通栏物理折射 / 重力传感器高光玻璃底栏"
+                desc = "通透悬浮底栏，自动适配日间与夜间"
             ),
-            ActionItem("液态玻璃参数微调", desc = "内置预览，点「保存并生效」后应用；想直接在真实底栏上实时调：长按「我的」页的「设置」按钮") {
+            ActionItem("玻璃底栏外观", desc = "日间与夜间分别配色，内置实时预览") {
                 LiquidGlassSettingsDialog.show(activity, false, null) {
                     try {
                         com.yilink.jumpclean.hooks.LiquidGlassHooks.refreshFromSettings()
