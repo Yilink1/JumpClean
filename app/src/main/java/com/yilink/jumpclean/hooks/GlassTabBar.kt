@@ -2,10 +2,14 @@ package com.yilink.jumpclean.hooks
 
 import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.Color
+import android.os.SystemClock
+import android.view.ViewTreeObserver
 import android.widget.ImageView
 import android.widget.TextView
 import android.view.ViewGroup
 import com.example.liquidglass.LiquidGlassTabBar
+import com.example.liquidglass.LiquidGlassView
 
 /**
  * 只做一件事：给库的 tab 文字/图标上色。
@@ -17,6 +21,79 @@ import com.example.liquidglass.LiquidGlassTabBar
 class GlassTabBar(context: Context) : LiquidGlassTabBar(context) {
     private var labelSelected = 0xFF202633.toInt()
     private var labelNormal = 0x8C3A4252.toInt()
+    private var scrollThrottleUntil = 0L
+    private var lastBodyInvalidate = 0L
+
+    private val scrollIdle = Runnable {
+        scrollThrottleUntil = 0L
+        lastBodyInvalidate = 0L
+        super.invalidate()
+    }
+    private val scrollListener = ViewTreeObserver.OnScrollChangedListener {
+        // 信息流滚动时玻璃本体最多 ~11fps 重绘，停手后补一帧。
+        scrollThrottleUntil = SystemClock.uptimeMillis() + 180L
+        removeCallbacks(scrollIdle)
+        postDelayed(scrollIdle, 200L)
+    }
+
+    init {
+        tuneDroplet()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        viewTreeObserver.addOnScrollChangedListener(scrollListener)
+    }
+
+    override fun onDetachedFromWindow() {
+        try {
+            viewTreeObserver.removeOnScrollChangedListener(scrollListener)
+        } catch (_: Throwable) {
+        }
+        removeCallbacks(scrollIdle)
+        super.onDetachedFromWindow()
+    }
+
+    override fun invalidate() {
+        if (SystemClock.uptimeMillis() < scrollThrottleUntil) {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastBodyInvalidate < 90L) return
+            lastBodyInvalidate = now
+        }
+        super.invalidate()
+    }
+
+    /**
+     * 只调库自己那颗透镜水滴的光学参数（绘制/动画仍由库负责）。
+     * 水滴是库的私有字段，失败时静默退回库默认值。
+     */
+    private fun tuneDroplet() {
+        try {
+            val field = LiquidGlassTabBar::class.java.getDeclaredField("droplet")
+            field.isAccessible = true
+            val droplet = field.get(this) as? LiquidGlassView ?: return
+            val density = resources.displayMetrics.density
+            droplet.enableBackdropBlur = false
+            droplet.bevelWidth = 16f * density
+            droplet.refractionHeight = 12f * density
+            droplet.refractionFalloff = 0.62f
+            droplet.refractionNoFold = false
+            droplet.refractionOutward = false
+            droplet.dispersionStrength = 0.30f
+            droplet.edgeHighlightOpacity = 100f
+            droplet.edgeSoftness = 1f * density
+            droplet.adaptiveLensScale = true
+            droplet.enableChromaticDispersion = false
+            droplet.enableOptimizedCapture = true
+            droplet.globalDownsampleFactor = 0.5f
+            droplet.downsampleScale = 3
+            droplet.saturation = 135f
+            droplet.setGlassTint(Color.WHITE, 0.03f)
+            droplet.overLight = false
+            droplet.invalidate()
+        } catch (_: Throwable) {
+        }
+    }
 
     fun setLabelColors(selected: Int, normal: Int) {
         labelSelected = selected

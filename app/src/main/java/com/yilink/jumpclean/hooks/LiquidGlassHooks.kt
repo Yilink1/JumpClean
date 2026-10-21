@@ -185,7 +185,7 @@ object LiquidGlassHooks {
      * 把一组「未保存」的参数直接作用到真实底栏，设置面板拖滑块时实时看效果。
      * 不写 SharedPreferences；面板取消时由 [refreshFromSettings] 还原为已保存的参数。
      */
-    fun applyStyleLive(activity: Activity, s: GlassStyle.Params) {
+    fun applyStyleLive(activity: Activity, s: GlassStyle.Params, previewNight: Boolean? = null) {
         try {
             val pill = findGlassPill(activity) ?: return
             val frame = activity.findViewById<FrameLayout>(android.R.id.content) ?: return
@@ -193,11 +193,11 @@ object LiquidGlassHooks {
             val geometryChanged = old == null || old.height != dp(activity, s.pillHeight) ||
                 old.leftMargin != dp(activity, s.pillMarginH) ||
                 old.bottomMargin != dp(activity, s.pillMarginBottom)
-            GlassStyle.apply(pill, s)
+            GlassStyle.apply(pill, s, previewNight)
             pill.invalidate()
             if (geometryChanged) {
                 pill.layoutParams = pillParams(activity, s)
-                ensureShadow(activity, frame, pill, s)
+                ensureShadow(activity, frame, pill, s, previewNight)
                 val id = HookUtils.getCachedResId(activity, "containerFra")
                 val container = activity.findViewById<ViewGroup>(id)
                 container?.post { padVisibleFragmentRV(container, contentPadPx(activity, s), true) }
@@ -441,12 +441,18 @@ object LiquidGlassHooks {
     //  外形、投影与留白（玻璃参数见 GlassStyle）
     // ════════════════════════════════════════════════════
 
-    private fun ensureShadow(activity: Activity, frame: FrameLayout, bar: GlassTabBar, s: GlassStyle.Params) {
+    private fun ensureShadow(
+        activity: Activity,
+        frame: FrameLayout,
+        bar: GlassTabBar,
+        s: GlassStyle.Params,
+        previewNight: Boolean? = null
+    ) {
         var shadow = findShadow(frame)
         val created = shadow == null
         if (shadow == null) shadow = GlassShadowView(activity)
         val pad = shadow.configure(
-            strength = GlassStyle.shadowStrength(GlassStyle.isNight(activity)),
+            strength = GlassStyle.shadowStrength(previewNight ?: GlassStyle.isNight(activity)),
             blurPx = dp(activity, s.shadowBlur).toFloat(),
             offsetYPx = dp(activity, s.shadowOffset).toFloat(),
             cornerPx = if (s.cornerDp <= 0) 9999f else dp(activity, s.cornerDp).toFloat()

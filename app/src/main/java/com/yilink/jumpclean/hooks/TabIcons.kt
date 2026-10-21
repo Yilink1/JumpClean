@@ -16,13 +16,14 @@ import android.graphics.drawable.Drawable
  */
 object TabIcons {
 
-    enum class Kind { HOME, COMPASS, PERSON, GIFT, SPARKLE }
+    enum class Kind { HOME, JOYCON, GAMEPAD, COMPASS, FLAME, PERSON, GIFT, SPARKLE }
 
     fun forTitle(title: CharSequence): Drawable {
         val text = title.toString()
         val kind = when {
-            text.contains("首页") || text.contains("主页") || text.contains("home", true) -> Kind.HOME
-            text.contains("发现") || text.contains("探索") || text.contains("频道") -> Kind.COMPASS
+            text.contains("首页") || text.contains("主页") || text.contains("home", true) -> Kind.JOYCON
+            text.contains("发现") || text.contains("探索") || text.contains("频道") -> Kind.FLAME
+            text.contains("游戏") -> Kind.GAMEPAD
             text.contains("我的") || text.contains("个人") || text.contains("mine", true) -> Kind.PERSON
             text.contains("赏") || text.contains("抽") || text.contains("礼") || text.contains("游戏") -> Kind.GIFT
             else -> Kind.SPARKLE
@@ -55,7 +56,10 @@ object TabIcons {
             canvas.scale(scale, scale)
             when (kind) {
                 Kind.HOME -> drawHome(canvas)
+                Kind.JOYCON -> drawJoyCon(canvas)
+                Kind.GAMEPAD -> drawGamepad(canvas)
                 Kind.COMPASS -> drawCompass(canvas)
+                Kind.FLAME -> drawFlame(canvas)
                 Kind.PERSON -> drawPerson(canvas)
                 Kind.GIFT -> drawGift(canvas)
                 Kind.SPARKLE -> drawSparkle(canvas)
@@ -87,6 +91,78 @@ object TabIcons {
             path.lineTo(13.6f, 13.6f)
             path.lineTo(8f, 16f)
             path.lineTo(10.4f, 10.4f)
+            path.close()
+            canvas.drawPath(path, fill)
+        }
+
+        private fun drawGamepad(canvas: Canvas) {
+            path.reset()
+            path.fillType = Path.FillType.EVEN_ODD
+            path.moveTo(7f, 7.6f)
+            path.cubicTo(4.2f, 7.6f, 2.4f, 10.6f, 2.4f, 14f)
+            path.cubicTo(2.4f, 17.4f, 4.4f, 19.2f, 6.4f, 19.2f)
+            path.cubicTo(7.6f, 19.2f, 8.5f, 18.5f, 9.4f, 17.4f)
+            path.lineTo(14.6f, 17.4f)
+            path.cubicTo(15.5f, 18.5f, 16.4f, 19.2f, 17.6f, 19.2f)
+            path.cubicTo(19.6f, 19.2f, 21.6f, 17.4f, 21.6f, 14f)
+            path.cubicTo(21.6f, 10.6f, 19.8f, 7.6f, 17f, 7.6f)
+            path.close()
+            // 十字键
+            path.moveTo(6.9f, 10.8f)
+            path.lineTo(7.9f, 10.8f)
+            path.lineTo(7.9f, 12.1f)
+            path.lineTo(9.2f, 12.1f)
+            path.lineTo(9.2f, 13.1f)
+            path.lineTo(7.9f, 13.1f)
+            path.lineTo(7.9f, 14.4f)
+            path.lineTo(6.9f, 14.4f)
+            path.lineTo(6.9f, 13.1f)
+            path.lineTo(5.6f, 13.1f)
+            path.lineTo(5.6f, 12.1f)
+            path.lineTo(6.9f, 12.1f)
+            path.close()
+            path.addCircle(16.2f, 11.9f, 0.95f, Path.Direction.CW)
+            path.addCircle(18.1f, 13.4f, 0.95f, Path.Direction.CW)
+            canvas.drawPath(path, fill)
+            path.fillType = Path.FillType.WINDING
+        }
+
+        private fun drawJoyCon(canvas: Canvas) {
+            path.reset()
+            path.fillType = Path.FillType.EVEN_ODD
+            // 左右两只手柄
+            path.addRoundRect(3.4f, 6.2f, 10.3f, 20.2f, 3.4f, 3.4f, Path.Direction.CW)
+            path.addRoundRect(13.7f, 6.2f, 20.6f, 20.2f, 3.4f, 3.4f, Path.Direction.CW)
+            // 左手十字键
+            path.moveTo(6.35f, 10.2f)
+            path.lineTo(7.35f, 10.2f)
+            path.lineTo(7.35f, 11.15f)
+            path.lineTo(8.3f, 11.15f)
+            path.lineTo(8.3f, 12.15f)
+            path.lineTo(7.35f, 12.15f)
+            path.lineTo(7.35f, 13.1f)
+            path.lineTo(6.35f, 13.1f)
+            path.lineTo(6.35f, 12.15f)
+            path.lineTo(5.4f, 12.15f)
+            path.lineTo(5.4f, 11.15f)
+            path.lineTo(6.35f, 11.15f)
+            path.close()
+            // 右手按键
+            path.addCircle(17f, 10.9f, 0.85f, Path.Direction.CW)
+            path.addCircle(18.5f, 12.5f, 0.85f, Path.Direction.CW)
+            canvas.drawPath(path, fill)
+            path.fillType = Path.FillType.WINDING
+        }
+
+        private fun drawFlame(canvas: Canvas) {
+            path.reset()
+            path.moveTo(12f, 2.4f)
+            path.cubicTo(12.4f, 6.1f, 16.4f, 8.1f, 15.9f, 12.6f)
+            path.cubicTo(15.6f, 16.3f, 14.1f, 19.1f, 12f, 21.2f)
+            path.cubicTo(9.9f, 19.1f, 8.4f, 16.3f, 8.1f, 12.6f)
+            path.cubicTo(7.8f, 9.6f, 9.4f, 7.1f, 10.4f, 5.1f)
+            path.cubicTo(10.8f, 7.1f, 11.6f, 8.0f, 12.4f, 8.7f)
+            path.cubicTo(12.9f, 6.7f, 12.5f, 4.5f, 12f, 2.4f)
             path.close()
             canvas.drawPath(path, fill)
         }

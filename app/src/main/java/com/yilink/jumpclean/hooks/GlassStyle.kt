@@ -13,9 +13,9 @@ import com.yilink.jumpclean.config.JumpConstants
  * 这里不再保存第二套光学参数。
  */
 object GlassStyle {
-    private const val PREFIX = "lg_v4_"
+    private const val PREFIX = "lg_v5_"
 
-    class Palette(var tone: Int = 0, var opacity: Int = 44, var accent: Int = 0) {
+    class Palette(var tone: Int = 0, var opacity: Int = 30, var accent: Int = 0) {
         fun copyFrom(other: Palette) {
             tone = other.tone
             opacity = other.opacity
@@ -24,8 +24,8 @@ object GlassStyle {
     }
 
     class Params {
-        val day = Palette(opacity = 44)
-        val night = Palette(opacity = 42)
+        val day = Palette(opacity = 30)
+        val night = Palette(opacity = 36)
         var finish = 0      // 0 轻透 / 1 柔雾
         var edge = 1        // 0 通透 / 1 标准 / 2 明显
         var dynamicBg = false
@@ -124,9 +124,9 @@ object GlassStyle {
     fun shadowStrength(night: Boolean): Float = if (night) 0.36f else 0.30f
 
     fun edgeHighlightOpacity(preset: Int, night: Boolean): Float = when (preset.coerceIn(0, 2)) {
-        0 -> if (night) 42f else 58f
+        0 -> if (night) 45f else 55f
         2 -> 100f
-        else -> if (night) 62f else 82f
+        else -> if (night) 78f else 96f
     }
 
     /** 唯一把配置作用到真实底栏的入口。 */
@@ -140,10 +140,27 @@ object GlassStyle {
         // 库在 overLight=true 时会额外压 20% 黑（亮背景保文字对比）。
         // 我们要的是白色玻璃，所以走材质自带的白色底 tint；模糊半径用 blurAmount 补回来。
         bar.overLight = false
-        bar.blurAmount = if (p.finish == 1) 0.50f else 0.42f
-        bar.saturation = if (night) 108f else 118f
+        bar.blurAmount = if (p.finish == 1) 0.34f else 0.30f
+        bar.saturation = if (night) 116f else 128f
+        // 信息流本身很重：玻璃捕获按 1/2 分辨率、模糊图再降采样，
+        // 并在关掉额外的色差整图拷贝，避免把宿主推向 OOM。
+        bar.enableOptimizedCapture = true
+        bar.globalDownsampleFactor = 0.5f
+        bar.downsampleScale = 3
+        bar.highQualityBlur = false
         bar.enableEdgeHighlight = true
         bar.edgeHighlightOpacity = edgeHighlightOpacity(p.edge, night)
+        // 液态玻璃的关键：边缘把背景“折”进来，再带一点色散。
+        val density = bar.resources.displayMetrics.density
+        bar.enableChromaticDispersion = false
+        bar.dispersionStrength = 0.20f
+        bar.bevelWidth = 18f * density
+        bar.refractionHeight = 10f * density
+        bar.refractionFalloff = 0.70f
+        bar.refractionNoFold = true
+        bar.refractionOutward = false
+        bar.edgeSoftness = 1f * density
+        bar.adaptiveLensScale = true
         bar.cornerRadius = 999f
         bar.enableDynamicBackground = p.dynamicBg
         bar.setGlassTint(tintColor(palette, night), palette.opacity.coerceIn(8, 55) / 100f)

@@ -14,6 +14,7 @@ import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -26,8 +27,6 @@ import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
-import com.example.liquidglass.LiquidGlassTabBar
-import com.yilink.jumpclean.hooks.GlassShadowView
 import com.yilink.jumpclean.hooks.GlassStyle
 import com.yilink.jumpclean.hooks.GlassTabBar
 import com.yilink.jumpclean.hooks.LiquidGlassHooks
@@ -36,6 +35,22 @@ import com.yilink.jumpclean.hooks.TabIcons
 /** 日夜两套配色、真实玻璃预览，以及少量直观的外观选项。 */
 object LiquidGlassSettingsDialog {
     fun show(activity: Activity, live: Boolean = false, parent: Dialog? = null, onApplied: (() -> Unit)? = null) {
+        val liveBar = if (live) LiquidGlassHooks.pillOf(activity) else null
+        if (liveBar == null) {
+            // 模块独立设置页：没有真实底栏，走带实时玻璃预览的旧弹窗。
+            LiquidGlassPreviewDialog.show(activity, parent, onApplied)
+        } else {
+            // 宿主快捷面板：顶部卡片，下面直接露出真实底栏。
+            showQuickSheet(activity, liveBar, parent, onApplied)
+        }
+    }
+
+    private fun showQuickSheet(
+        activity: Activity,
+        liveBar: GlassTabBar,
+        parent: Dialog?,
+        onApplied: (() -> Unit)? = null
+    ) {
         val density = activity.resources.displayMetrics.density
         fun dp(value: Int) = (value * density + 0.5f).toInt()
         val dark = GlassStyle.isNight(activity)
@@ -50,12 +65,43 @@ object LiquidGlassSettingsDialog {
         var saved = false
         var syncing = false
         var expanded = false
-        val liveBar = if (live) LiquidGlassHooks.pillOf(activity) else null
-        val dialog = Dialog(activity)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val contentFrame = activity.findViewById<FrameLayout>(android.R.id.content) ?: return
+        var backAction: (() -> Unit)? = null
+        val overlay = object : FrameLayout(activity) {
+            override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
+                    val action = backAction
+                    if (action != null) {
+                        action()
+                        return true
+                    }
+                }
+                return super.dispatchKeyEvent(event)
+            }
+        }.apply {
+            isClickable = true
+            isFocusable = true
+            isFocusableInTouchMode = true
+            clipChildren = false
+        }
+        var closed = false
+        val metrics = activity.resources.displayMetrics
+        val statusBarRes = activity.resources.getIdentifier("status_bar_height", "dimen", "android")
+        val statusBar = if (statusBarRes > 0) activity.resources.getDimensionPixelSize(statusBarRes) else dp(24)
+        val sheetTop = statusBar + dp(8)
+        val barArea = if (liveBar != null) dp(p.pillHeight + p.pillMarginBottom + 10) else 0
+        val sheetHeight = minOf(
+            (metrics.heightPixels * 0.63f).toInt(),
+            metrics.heightPixels - barArea - sheetTop - dp(12)
+        )
+            .coerceAtLeast(dp(320))
 
         fun rounded(color: Int, radius: Int = 14) = GradientDrawable().apply {
             setColor(color); cornerRadius = dp(radius).toFloat()
+        }
+        fun sheetBackground(color: Int) = GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(24).toFloat()
         }
         fun label(value: String, size: Float = 14f, color: Int = ink, bold: Boolean = false) = TextView(activity).apply {
             text = value; textSize = size; setTextColor(color)
@@ -63,70 +109,47 @@ object LiquidGlassSettingsDialog {
         }
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(20), dp(18), dp(14))
-            background = rounded(bg, 24)
+            setPadding(dp(18), dp(18), dp(18), dp(12))
+            background = sheetBackground(bg)
+            elevation = dp(16).toFloat()
         }
-        root.addView(label("液态玻璃", 21f, bold = true))
-        root.addView(label("跟随 Jump 明暗主题，日间与夜间分别配色", 12f, secondary).apply {
-            setPadding(0, dp(5), 0, dp(14))
-        })
-
-        val backdrop = PreviewScene(activity)
-        val bar = GlassTabBar(activity).apply {
-            setTabs(listOf("首页", "发现", "我的").map {
-                LiquidGlassTabBar.TabItem(it, TabIcons.forTitle(it))
-            })
-            backdropSource = backdrop
-        }
-        val shadow = GlassShadowView(activity)
-        val preview = FrameLayout(activity).apply {
-            clipToOutline = true
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, dp(18).toFloat())
-                }
+        root.addView(
+            View(activity).apply {
+                background = rounded(if (dark) 0xFF3A3F4A.toInt() else 0xFFD5D9E0.toInt(), 2)
+            },
+            LinearLayout.LayoutParams(dp(36), dp(4)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                bottomMargin = dp(8)
             }
-            addView(backdrop, FrameLayout.LayoutParams(-1, -1))
-            addView(shadow, FrameLayout.LayoutParams(1, 1))
-            addView(bar, FrameLayout.LayoutParams(-1, dp(p.pillHeight)))
+        )
+        val header = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
-        root.addView(preview, LinearLayout.LayoutParams(-1, dp(166)))
-        backdrop.onMoved = { bar.invalidate() }
-        root.addView(label("滑动背景看通透感，拖动底栏试试手感", 11f, secondary).apply {
-            gravity = Gravity.CENTER; setPadding(0, dp(7), 0, dp(3))
+        header.addView(label("液态玻璃", 20f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
+        val resetButton = label("重置", 14f, secondary, true).apply {
+            gravity = Gravity.CENTER
+            minWidth = dp(48)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+        }
+        header.addView(resetButton)
+        val done = label("完成", 14f, accent, true).apply {
+            gravity = Gravity.CENTER
+            minWidth = dp(48)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+        }
+        header.addView(done)
+        root.addView(header)
+        root.addView(label("编辑哪一套配色，真实底栏就实时应用哪一套；上方内容可直接滑动", 11f, secondary).apply {
+            setPadding(0, dp(2), 0, dp(8))
         })
 
         val content = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         val refreshers = mutableListOf<() -> Unit>()
-        var lastGeometry: Triple<Int, Int, Int>? = null
-        var shadowNight: Boolean? = null
         fun palette() = if (previewNight) p.night else p.day
         fun updatePreview() {
-            backdrop.night = previewNight
-            backdrop.invalidate()
-            GlassStyle.apply(bar, p, previewNight)
-            val margin = dp(p.pillMarginH)
-            val bottom = dp(p.pillMarginBottom)
-            val geometry = Triple(p.pillHeight, p.pillMarginH, p.pillMarginBottom)
-            if (lastGeometry != geometry) {
-                bar.layoutParams = FrameLayout.LayoutParams(-1, dp(p.pillHeight)).apply {
-                    gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                    leftMargin = margin; rightMargin = margin; bottomMargin = bottom
-                }
-            }
-            if (lastGeometry != geometry || shadowNight != previewNight) {
-                val pad = shadow.configure(GlassStyle.shadowStrength(previewNight), dp(p.shadowBlur).toFloat(),
-                    dp(p.shadowOffset).toFloat(), 9999f)
-                shadow.layoutParams = FrameLayout.LayoutParams(-1, dp(p.pillHeight) + pad * 2).apply {
-                    gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                    leftMargin = margin - pad; rightMargin = margin - pad; bottomMargin = bottom - pad
-                }
-                shadowNight = previewNight
-            }
-            lastGeometry = geometry
-            bar.invalidate()
-            // 预览切换日夜不改变宿主主题，真实底栏仍使用宿主当前的配色。
-            if (liveBar != null) LiquidGlassHooks.applyStyleLive(activity, p)
+            // 直接作用到真实底栏；previewNight 只决定编辑/预览哪一套配色。
+            if (liveBar != null) LiquidGlassHooks.applyStyleLive(activity, p, previewNight)
         }
         fun sync() {
             syncing = true
@@ -265,56 +288,95 @@ object LiquidGlassSettingsDialog {
             root.addView(ScrollView(activity).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
         }
 
-        val footer = LinearLayout(activity).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(12), 0, 0)
+        fun close(after: (() -> Unit)? = null) {
+            if (closed) return
+            closed = true
+            val distance = -(root.height.takeIf { it > 0 } ?: sheetHeight).toFloat()
+            root.animate().translationY(distance).setDuration(180).withEndAction {
+                contentFrame.removeView(overlay)
+                parent?.show()
+                after?.invoke()
+            }.start()
         }
-        fun button(title: String, primary: Boolean = false, action: () -> Unit): TextView =
-            label(title, 14f, if (primary) if (dark) 0xFF152438.toInt() else Color.WHITE else secondary, true).apply {
-                gravity = Gravity.CENTER; minHeight = dp(44)
-                background = rounded(if (primary) accent else Color.TRANSPARENT, 12)
-                setOnClickListener { action() }
-                footer.addView(this, LinearLayout.LayoutParams(0, -2, 1f))
+
+        fun save() {
+            if (closed) return
+            GlassStyle.save(p)
+            saved = true
+            close {
+                if (onApplied != null) onApplied() else LiquidGlassHooks.refreshFromSettings()
             }
-        button("取消") { dialog.dismiss() }
-        button("重置") {
-            p.copyFrom(GlassStyle.defaults()); sync()
-            Toast.makeText(activity, "已恢复日间与夜间默认外观，保存后生效", Toast.LENGTH_SHORT).show()
         }
-        button("保存", true) {
-            GlassStyle.save(p); saved = true
-            if (onApplied != null) onApplied() else LiquidGlassHooks.refreshFromSettings()
-            dialog.dismiss()
-        }
-        root.addView(footer)
-        dialog.setOnDismissListener {
-            // 取消、返回键和点外部关闭均不保存；实时预览恢复到已保存外观。
+        done.setOnClickListener { save() }
+        backAction = {
             if (!saved && liveBar != null) LiquidGlassHooks.refreshFromSettings()
-            parent?.show()
+            close()
         }
-        if (liveBar != null) parent?.hide()
+        resetButton.setOnClickListener {
+            p.copyFrom(GlassStyle.defaults())
+            sync()
+            Toast.makeText(activity, "已恢复日间与夜间默认外观", Toast.LENGTH_SHORT).show()
+        }
+
+        if (parent != null) parent.hide()
         sync()
-        dialog.setContentView(root)
-        dialog.show()
-        dialog.window?.apply {
-            setBackgroundDrawableResource(android.R.color.transparent)
-            val metrics = activity.resources.displayMetrics
-            setLayout(minOf(metrics.widthPixels - dp(24), dp(480)), (metrics.heightPixels * 0.88f).toInt())
-            setGravity(Gravity.CENTER)
-        }
+        overlay.addView(root, FrameLayout.LayoutParams(-1, sheetHeight).apply {
+            gravity = Gravity.TOP
+            topMargin = sheetTop
+        })
+        contentFrame.addView(overlay, FrameLayout.LayoutParams(-1, sheetHeight).apply {
+            gravity = Gravity.TOP
+            topMargin = sheetTop
+        })
+        overlay.requestFocus()
+        root.translationY = -sheetHeight.toFloat()
+        root.post { root.animate().translationY(0f).setDuration(240).start() }
     }
 
-    /** 简化的信息流场景；手动滚动，不在面板中常驻运行动画。 */
+    /**
+     * 简化的信息流场景 + 静态底栏预览。
+     *
+     * 面板里刻意不再放真实的 LiquidGlassTabBar：那会在对话框内再启动一套
+     * 背景捕获/模糊/布局，滚动时容易在主线程反复 requestLayout。
+     * 这里只画配色、浓度、透镜和图标，足够调参，也不会和真实底栏抢资源。
+     */
     private class PreviewScene(context: Context) : View(context) {
         var night = false
-        var onMoved: (() -> Unit)? = null
         private var offset = 0f
         private var lastY = 0f
+        private var tint = Color.WHITE
+        private var tintAlpha = 0.44f
+        private var accent = Color.BLACK
+        private var normal = Color.GRAY
+        private var barHeightDp = 64
+        private var marginHDp = 24
+        private var marginBottomDp = 12
         private val d = resources.displayMetrics.density
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val bounds = RectF()
+        private val barRect = RectF()
+        private val lensRect = RectF()
+        private val icons = listOf(
+            TabIcons.forTitle("首页"),
+            TabIcons.forTitle("发现"),
+            TabIcons.forTitle("我的")
+        )
+        private val labels = listOf("首页", "发现", "我的")
         private val tile = LinearGradient(0f, 0f, 160f * d, 160f * d,
             intArrayOf(0xFF84B6B0.toInt(), 0xFF8CA7CF.toInt(), 0xFFD4A7A9.toInt()), null, Shader.TileMode.CLAMP)
+
+        fun applyStyle(p: GlassStyle.Params, previewNight: Boolean) {
+            night = previewNight
+            val palette = if (night) p.night else p.day
+            tint = GlassStyle.tintColor(palette, night)
+            tintAlpha = palette.opacity.coerceIn(8, 55) / 100f
+            accent = GlassStyle.accentColor(palette, night)
+            normal = GlassStyle.normalTextColor(night)
+            barHeightDp = p.pillHeight
+            marginHDp = p.pillMarginH
+            marginBottomDp = p.pillMarginBottom
+            invalidate()
+        }
 
         override fun onDraw(canvas: Canvas) {
             canvas.drawColor(if (night) 0xFF14171D.toInt() else 0xFFF0F3F8.toInt())
@@ -341,6 +403,70 @@ object LiquidGlassSettingsDialog {
             paint.textSize = 12f * d
             paint.color = if (night) 0xFFAEB7C8.toInt() else 0xFF6E7D92.toInt()
             canvas.drawText(if (night) "夜间 / 安静一点" else "日间 / 轻盈一点", 16f * d, 25f * d, paint)
+            drawBar(canvas)
+        }
+
+        private fun drawBar(canvas: Canvas) {
+            val barH = barHeightDp * d
+            val left = marginHDp * d
+            val right = width - marginHDp * d
+            val bottom = height - marginBottomDp * d
+            val top = bottom - barH
+            if (right <= left || barH <= 0f) return
+            barRect.set(left, top, right, bottom)
+            val radius = barH / 2f
+
+            paint.shader = null
+            paint.style = Paint.Style.FILL
+            paint.color = Color.argb(if (night) 80 else 45, 0, 0, 0)
+            canvas.drawRoundRect(left, top + 3f * d, right, bottom + 4f * d, radius, radius, paint)
+
+            paint.color = Color.argb(
+                (tintAlpha * 255f).toInt().coerceIn(0, 255),
+                Color.red(tint), Color.green(tint), Color.blue(tint)
+            )
+            canvas.drawRoundRect(barRect, radius, radius, paint)
+
+            val tabWidth = (right - left) / 3f
+            val lensPadX = 3f * d
+            val lensPadY = 4f * d
+            lensRect.set(left + lensPadX, top + lensPadY, left + tabWidth - lensPadX, bottom - lensPadY)
+            val lensRadius = lensRect.height() / 2f
+            paint.color = Color.argb(if (night) 34 else 30, 255, 255, 255)
+            canvas.drawRoundRect(lensRect, lensRadius, lensRadius, paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 1.2f * d
+            paint.color = Color.argb(if (night) 170 else 215, 255, 255, 255)
+            canvas.drawRoundRect(lensRect, lensRadius, lensRadius, paint)
+            paint.style = Paint.Style.FILL
+            paint.strokeWidth = 1f * d
+            paint.color = Color.argb(if (night) 130 else 150, 255, 255, 255)
+            canvas.drawRoundRect(
+                left + d, top + d, right - d, bottom - d,
+                radius - d, radius - d, paint
+            )
+
+            val iconSize = 21f * d
+            val iconTop = top + 10f * d
+            paint.textAlign = Paint.Align.CENTER
+            paint.textSize = 10f * d
+            paint.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            labels.forEachIndexed { index, text ->
+                val cx = left + tabWidth * (index + 0.5f)
+                val color = if (index == 0) accent else normal
+                val icon = icons[index]
+                icon.setTintList(ColorStateList.valueOf(color))
+                icon.setBounds(
+                    (cx - iconSize / 2f).toInt(),
+                    iconTop.toInt(),
+                    (cx + iconSize / 2f).toInt(),
+                    (iconTop + iconSize).toInt()
+                )
+                icon.draw(canvas)
+                paint.color = color
+                canvas.drawText(text, cx, bottom - 11f * d, paint)
+            }
+            paint.textAlign = Paint.Align.LEFT
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -348,7 +474,8 @@ object LiquidGlassSettingsDialog {
                 MotionEvent.ACTION_DOWN -> { lastY = event.y; parent?.requestDisallowInterceptTouchEvent(true) }
                 MotionEvent.ACTION_MOVE -> {
                     offset = (offset + (event.y - lastY) / d) % 72f
-                    lastY = event.y; invalidate(); onMoved?.invoke()
+                    lastY = event.y
+                    invalidate()
                 }
                 MotionEvent.ACTION_UP -> { parent?.requestDisallowInterceptTouchEvent(false); performClick() }
                 MotionEvent.ACTION_CANCEL -> parent?.requestDisallowInterceptTouchEvent(false)
