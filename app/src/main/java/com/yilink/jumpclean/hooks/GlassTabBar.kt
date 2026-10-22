@@ -270,26 +270,27 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
             dropletView = droplet
             val density = resources.displayMetrics.density
             droplet.enableBackdropBlur = false
-            droplet.bevelWidth = 6f * density
-            droplet.refractionHeight = 1.5f * density
-            droplet.refractionFalloff = 0.5f
-            droplet.refractionNoFold = true
+            // 水滴只负责“凸起”和边缘折光；标签已抬到水滴上方，但折射太深仍会在
+            // 图标下方拖出白色残影，所以保留较窄的折射带。
+            droplet.bevelWidth = 12f * density
+            droplet.refractionHeight = 7f * density
+            droplet.refractionFalloff = 0.75f
+            droplet.refractionNoFold = false
             droplet.refractionOutward = false
-            droplet.dispersionStrength = 0.0f
-            droplet.edgeHighlightOpacity = 45f
-            droplet.edgeSoftness = 0.8f * density
+            droplet.dispersionStrength = 0.20f
+            droplet.edgeHighlightOpacity = 85f
+            droplet.edgeSoftness = 1f * density
             droplet.adaptiveLensScale = true
             droplet.enableChromaticDispersion = false
-            droplet.enableChromaticAberration = false
             droplet.enableOptimizedCapture = true
             droplet.globalDownsampleFactor = 0.5f
             droplet.downsampleScale = 3
-            droplet.saturation = 100f
-            droplet.setGlassTint(Color.WHITE, 0.08f)
+            droplet.saturation = 135f
+            droplet.setGlassTint(Color.BLACK, 0.05f)
             droplet.overLight = false
             droplet.invalidate()
             if (GlassStyle.devTrace()) {
-                ConfigManager.log("[LiquidGlass] droplet 光学参数已应用 (清晰无重影)")
+                ConfigManager.log("[LiquidGlass] droplet 光学参数已应用")
             }
         } catch (t: Throwable) {
             ConfigManager.logError("[LiquidGlass] droplet 调参失败", t)
@@ -313,14 +314,13 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
             return
         }
         droplet.overLight = night
-        if (night) {
-            val strength = ((tintPercent - 10).coerceIn(4, 22) / 100f)
-            droplet.setGlassTint(0xFF1E2430.toInt(), strength)
-            droplet.edgeHighlightOpacity = 40f
+        val strength = if (night) {
+            ((tintPercent - 15).coerceIn(2, 26) / 100f)
         } else {
-            droplet.setGlassTint(Color.WHITE, 0.08f)
-            droplet.edgeHighlightOpacity = 45f
+            0.05f
         }
+        droplet.setGlassTint(Color.BLACK, strength)
+        droplet.edgeHighlightOpacity = if (night) 65f else 85f
         droplet.invalidate()
         invalidate()
         if (GlassStyle.devTrace()) {

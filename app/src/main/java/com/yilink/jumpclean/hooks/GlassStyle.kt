@@ -175,9 +175,9 @@ object GlassStyle {
     fun shadowStrength(night: Boolean): Float = if (night) 0.42f else 0.38f
 
     fun edgeHighlightOpacity(preset: Int, night: Boolean): Float = when (preset.coerceIn(0, 2)) {
-        0 -> if (night) 38f else 48f
-        2 -> 80f
-        else -> if (night) 52f else 68f
+        0 -> if (night) 48f else 60f
+        2 -> 100f
+        else -> if (night) 82f else 100f
     }
 
     /** 唯一把配置作用到真实底栏的入口。 */
@@ -196,7 +196,7 @@ object GlassStyle {
         } else {
             if (soft) 0.34f else 0.30f
         }
-        bar.saturation = if (night) 115f else 110f
+        bar.saturation = if (night) 132f else 128f
         // 信息流本身很重：玻璃捕获按 1/2 分辨率、模糊图再降采样，
         // 并在关掉额外的色差整图拷贝，避免把宿主推向 OOM。
         bar.enableOptimizedCapture = true
@@ -208,13 +208,13 @@ object GlassStyle {
         // 液态玻璃的关键：边缘把背景“折”进来，再带一点色散。
         val density = bar.resources.displayMetrics.density
         bar.enableChromaticDispersion = false
-        bar.dispersionStrength = 0.0f
-        bar.bevelWidth = 8f * density
-        bar.refractionHeight = 3.5f * density
-        bar.refractionFalloff = 0.50f
+        bar.dispersionStrength = 0.20f
+        bar.bevelWidth = 18f * density
+        bar.refractionHeight = 10f * density
+        bar.refractionFalloff = 0.70f
         bar.refractionNoFold = true
         bar.refractionOutward = false
-        bar.edgeSoftness = 0.8f * density
+        bar.edgeSoftness = 1f * density
         bar.adaptiveLensScale = true
         bar.cornerRadius = 999f
         bar.enableDynamicBackground = p.dynamicBg
