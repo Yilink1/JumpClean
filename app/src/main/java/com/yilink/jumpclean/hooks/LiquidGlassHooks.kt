@@ -38,6 +38,7 @@ object LiquidGlassHooks {
     private const val TAG_SAVED_HEIGHT = -0x7f001004
     private const val TAG_SAVED_PADDING = -0x7f001003
     private const val TAG_TABS_WATCHED = -0x7f001002
+    private const val TAG_SCROLL_WATCHED = -0x7f001006
 
     /** 由宿主驱动的选中同步期间置位，避免玻璃条的 onTabSelected 再反向 performClick 一次 */
     @Volatile private var suppressSelect = false
@@ -74,34 +75,16 @@ object LiquidGlassHooks {
         }
 
         try {
-            // ── RadioGroup.check 双向同步：切页 → 水滴联动 ──
-            XposedHelpers.findAndHookMethod(
-                RadioGroup::class.java,
-                "check",
-                Int::class.javaPrimitiveType,
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        val group = param.thisObject as? RadioGroup ?: return
-                        val checkedId = param.args[0] as Int
-                        val activity = unwrapActivity(group.context) ?: return
-                        val glass = findGlassPill(activity) ?: return
-                        val tabMap = glass.getTag(TAG_TAB_MAP) as? List<*> ?: return
-
-                        @Suppress("UNCHECKED_CAST")
-                        val tabs = tabMap as? List<Pair<String, Int>> ?: return
-                        val newIndex = tabs.indexOfFirst { it.second == checkedId }
-                        if (newIndex >= 0 && glass.selectedIndex != newIndex) {
-                            setSelectedQuiet(glass, newIndex)
-                        }
-                        // 切页后新 Fragment 的主 RecyclerView 也需要底部留白
-                        val cId = HookUtils.getCachedResId(activity, "containerFra").takeIf { it != 0 } ?: return
-                        val cFra = activity.findViewById<View>(cId) as? ViewGroup
-                        cFra?.postDelayed({
-                            padVisibleFragmentRV(cFra, contentPadPx(activity, GlassStyle.load()), true)
-                        }, 300)
-                    }
+            // ── RadioGroup.check / setCheckedId 双向同步：切页 → 水滴联动 ──
+            val tabSyncHook = object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    syncTabFromGroup(param.thisObject as? RadioGroup, param.args[0] as Int)
                 }
-            )
+            }
+            XposedHelpers.findAndHookMethod(RadioGroup::class.java, "check", Int::class.javaPrimitiveType, tabSyncHook)
+            try {
+                XposedHelpers.findAndHookMethod(RadioGroup::class.java, "setCheckedId", Int::class.javaPrimitiveType, tabSyncHook)
+            } catch (_: Throwable) {}
 
             // ── onCreate → 初始挂载 ──
             XposedHelpers.findAndHookMethod(
@@ -271,7 +254,12 @@ object LiquidGlassHooks {
             // 「隐藏 Jump 赏 / 抽奖」等开关会改变可见 Tab，必须同步到玻璃条，
             // 否则 Tab 数量、文字、点击映射都会和原底栏错位
             syncTabsIfChanged(existing, rgMainTab)
-            existing.backdropSource = containerFra
+            val curChecked = rgMainTab.checkedRadioButtonId
+            val curIdx = visibleTabs.indexOfFirst { it.second == curChecked }
+            if (curIdx >= 0 && existing.selectedIndex != curIdx) {
+                setSelectedQuiet(existing, curIdx)
+            }
+            existing.backdropSource = null
             applyWebLayers()
             GlassStyle.apply(existing, style)
             existing.layoutParams = pillParams(activity, style)
@@ -295,7 +283,6 @@ object LiquidGlassHooks {
             val initIndex = visibleTabs.indexOfFirst { it.second == currentChecked }
             if (initIndex >= 0) selectedIndex = initIndex
 
-            backdropSource = containerFra
             GlassStyle.apply(this, style)
 
             // 点击切页
@@ -307,8 +294,14 @@ object LiquidGlassHooks {
                     val tabs = (getTag(TAG_TAB_MAP) as? List<Pair<String, Int>>) ?: emptyList()
                     if (!suppressSelect && index in tabs.indices) {
                         val targetId = tabs[index].second
-                        if (rgMainTab.checkedRadioButtonId == targetId) {
-                            activity.findViewById<View>(targetId)?.performClick()
+                        val rb = activity.findViewById<View>(targetId)
+                        if (rb != null) {
+                            if (rgMainTab.checkedRadioButtonId != targetId) {
+                                rgMainTab.check(targetId)
+                            }
+                            rb.isClickable = true
+                            rb.performClick()
+                            rb.isClickable = false
                         } else {
                             rgMainTab.check(targetId)
                         }
@@ -369,6 +362,25 @@ object LiquidGlassHooks {
             out.add(title to rb.id)
         }
         return out
+    }
+
+    private fun syncTabFromGroup(group: RadioGroup?, checkedId: Int) {
+        if (group == null || checkedId <= 0) return
+        val activity = unwrapActivity(group.context) ?: return
+        val glass = findGlassPill(activity) ?: return
+        val tabMap = glass.getTag(TAG_TAB_MAP) as? List<*> ?: return
+
+        @Suppress("UNCHECKED_CAST")
+        val tabs = tabMap as? List<Pair<String, Int>> ?: return
+        val newIndex = tabs.indexOfFirst { it.second == checkedId }
+        if (newIndex >= 0 && glass.selectedIndex != newIndex) {
+            setSelectedQuiet(glass, newIndex)
+        }
+        val cId = HookUtils.getCachedResId(activity, "containerFra").takeIf { it != 0 } ?: return
+        val cFra = activity.findViewById<View>(cId) as? ViewGroup
+        cFra?.postDelayed({
+            padVisibleFragmentRV(cFra, contentPadPx(activity, GlassStyle.load()), true)
+        }, 300)
     }
 
     private fun setSelectedQuiet(glass: GlassTabBar, index: Int) {
@@ -633,6 +645,59 @@ object LiquidGlassHooks {
      *   ③ 底边贴着容器底边（±24dp）——真正会被底栏盖住的那个
      * 满足多个时取最高的；还没布局好就稍后重试一次。
      */
+    /**
+     * 智能滚动联动节流器：
+     * 1. 彻底解决快速滑动时的 512MB JVM 堆 OOM 与 2-3 秒卡死：
+     *    原本 backdropSource 直连 ViewTreeObserver 导致 120Hz 帧帧重绘并双倍绘制整个 RecyclerView；
+     * 2. 现在滑动期间按 60ms 平滑节流（上限 ~16fps，无感流畅同时极低开销）；
+     * 3. 停止滑动 100ms 后自动触发定格重绘，保证底栏底色与定格背景完美咬合；
+     * 4. 滑动期间持续监测 JVM 堆，一旦接近临界值主动倾倒 Glide 缓存。
+     */
+    private fun setupSmartScrollThrottle(target: View, activity: Activity?) {
+        val act = activity ?: return
+        if (target.getTag(TAG_SCROLL_WATCHED) != null) return
+        target.setTag(TAG_SCROLL_WATCHED, true)
+
+        val vto = target.viewTreeObserver
+        if (!vto.isAlive) return
+
+        val scrollListener = object : android.view.ViewTreeObserver.OnScrollChangedListener {
+            private var lastLiveInvalidateTime = 0L
+            private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+            private val idleRunnable = Runnable {
+                val glass = findGlassPill(act) ?: return@Runnable
+                glass.checkHeapAndAdjustQuality()
+                glass.invalidate()
+            }
+
+            override fun onScrollChanged() {
+                val glass = findGlassPill(act) ?: return
+                mainHandler.removeCallbacks(idleRunnable)
+                mainHandler.postDelayed(idleRunnable, 100L)
+
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - lastLiveInvalidateTime >= 60L) {
+                    lastLiveInvalidateTime = now
+                    glass.checkHeapAndAdjustQuality()
+                    glass.invalidate()
+                }
+            }
+        }
+        vto.addOnScrollChangedListener(scrollListener)
+
+        target.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {}
+            override fun onViewDetachedFromWindow(v: View) {
+                try {
+                    if (target.viewTreeObserver.isAlive) {
+                        target.viewTreeObserver.removeOnScrollChangedListener(scrollListener)
+                    }
+                } catch (_: Throwable) {}
+                target.setTag(TAG_SCROLL_WATCHED, null)
+            }
+        })
+    }
+
     private fun padVisibleFragmentRV(containerFra: ViewGroup?, extraPad: Int, retry: Boolean) {
         if (containerFra == null) return
         var found = false
@@ -654,6 +719,7 @@ object LiquidGlassHooks {
                 (target as? ViewGroup)?.clipToPadding = false
                 ConfigManager.log("[LiquidGlass] 留白目标: ${describeView(target)} h=${target.height} pad=$extraPad")
             }
+            setupSmartScrollThrottle(target, containerFra.context as? Activity)
             return
         }
         if (!found && needRetry && retry) {

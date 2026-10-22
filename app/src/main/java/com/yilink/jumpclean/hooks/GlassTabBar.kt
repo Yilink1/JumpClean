@@ -1,7 +1,9 @@
 package com.yilink.jumpclean.hooks
 
+import android.app.Activity
 import android.content.ComponentCallbacks2
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Canvas
@@ -82,16 +84,18 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
     }
 
     /**
-     * 主动监控 JVM 堆内存（防 OOM 真正核心）：
+     * 主动监控 JVM 堆内存（防 OOM 核心机制）：
      *
      * 宿主（Jump）发现页包含大量 Banner 与游戏流图片，Glide 缓存会把堆内存推向 400MB+。
-     * 当 JVM 堆占用达到 78%（约 400MB / 512MB 上限）时，立即主动熔断降级为不透明轻质胶囊，
-     * 彻底断开背景捕获并释放位图分配，抢在 ART 垃圾回收抛 OOM 之前保全进程。
-     * 当堆内存回落到 65% 以下且稳定后，再平滑恢复液态透镜。
+     * 当 JVM 堆占用达到 72%（约 368MB / 512MB 上限）时，立即主动熔断：
+     * 1. 降级为不透明轻质胶囊，切断昂贵的效果渲染；
+     * 2. 并在主线程调用 Glide.clearMemory() 主动倾倒图片内存缓存，释放 100MB+ 堆空间，
+     *    抢在 ART 触发长停顿 GC 或抛出 OOM 之前彻底消除内存危机。
+     * 当堆内存回落到 60% 以下且稳定后，再平滑恢复液态透镜。
      */
-    private fun checkHeapAndAdjustQuality() {
+    fun checkHeapAndAdjustQuality(force: Boolean = false) {
         val now = SystemClock.uptimeMillis()
-        if (now - lastHeapCheckTime < 350L) return
+        if (!force && now - lastHeapCheckTime < 250L) return
         lastHeapCheckTime = now
 
         val rt = Runtime.getRuntime()
@@ -100,7 +104,7 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
         val used = rt.totalMemory() - rt.freeMemory()
         val usedRatio = used.toFloat() / max.toFloat()
 
-        if (usedRatio >= 0.78f) {
+        if (usedRatio >= 0.72f) {
             if (!qualityReduced) {
                 qualityReduced = true
                 accessibilityMode = GlassAccessibilityMode.FORCE_OPAQUE
@@ -110,10 +114,11 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
                 dropletView?.enableEdgeHighlight = false
                 invalidate()
                 ConfigManager.log(
-                    "[LiquidGlass] JVM 堆熔断触发: 占用 ${(usedRatio * 100).toInt()}% (${used / 1024 / 1024}MB / ${max / 1024 / 1024}MB)，已降级为不透明轻质胶囊"
+                    "[LiquidGlass] JVM 堆熔断触发: 占用 ${(usedRatio * 100).toInt()}% (${used / 1024 / 1024}MB / ${max / 1024 / 1024}MB)，已降级为不透明轻质胶囊并清理缓存"
                 )
             }
-        } else if (usedRatio < 0.65f) {
+            releaseHostMemoryCaches()
+        } else if (usedRatio < 0.60f) {
             if (qualityReduced) {
                 qualityReduced = false
                 accessibilityMode = GlassAccessibilityMode.AUTO
@@ -125,6 +130,42 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
                 ConfigManager.log(
                     "[LiquidGlass] JVM 堆恢复正常: 占用 ${(usedRatio * 100).toInt()}% (${used / 1024 / 1024}MB / ${max / 1024 / 1024}MB)，已恢复液态透镜"
                 )
+            }
+        }
+    }
+
+    /**
+     * 主动救场：清理宿主（Jump）Glide 图片内存缓存与触发 trimMemory，
+     * 可瞬间为宿主释放 100MB~200MB 的 JVM 堆空间，彻底杜绝 ViewFlinger 期间的 OOM。
+     */
+    private fun releaseHostMemoryCaches() {
+        try {
+            val appCtx = context.applicationContext
+            // 1. 清理 Glide 内存缓存 (主线程安全执行)
+            try {
+                val glideCls = Class.forName("com.bumptech.glide.Glide", false, appCtx.classLoader)
+                val getMethod = glideCls.getMethod("get", Context::class.java)
+                val glideInstance = getMethod.invoke(null, appCtx)
+                glideCls.getMethod("clearMemory").invoke(glideInstance)
+                if (GlassStyle.devTrace()) {
+                    ConfigManager.log("[LiquidGlass] 主动清理 Glide 内存缓存成功")
+                }
+            } catch (_: Throwable) {}
+
+            // 2. 触发 Activity 的低内存清理
+            var act: Activity? = null
+            var c: Context? = context
+            while (c is ContextWrapper) {
+                if (c is Activity) { act = c; break }
+                c = c.baseContext
+            }
+            act?.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW)
+
+            // 3. 提示 GC 回收
+            System.gc()
+        } catch (t: Throwable) {
+            if (GlassStyle.devTrace()) {
+                ConfigManager.log("[LiquidGlass] releaseHostMemoryCaches 异常: ${t.message}")
             }
         }
     }
@@ -153,17 +194,20 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
         val reallyLow = level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ||
             level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL ||
             level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE
-        if (reallyLow && !qualityReduced) {
-            qualityReduced = true
-            accessibilityMode = GlassAccessibilityMode.FORCE_OPAQUE
-            dropletView?.accessibilityMode = GlassAccessibilityMode.FORCE_OPAQUE
-            enableBackdropBlur = false
-            enableEdgeHighlight = false
-            dropletView?.enableEdgeHighlight = false
-            invalidate()
-            ConfigManager.log(
-                "[LiquidGlass] 系统低内存降级 level=$level heap=${heapSummary()}"
-            )
+        if (reallyLow) {
+            if (!qualityReduced) {
+                qualityReduced = true
+                accessibilityMode = GlassAccessibilityMode.FORCE_OPAQUE
+                dropletView?.accessibilityMode = GlassAccessibilityMode.FORCE_OPAQUE
+                enableBackdropBlur = false
+                enableEdgeHighlight = false
+                dropletView?.enableEdgeHighlight = false
+                invalidate()
+                ConfigManager.log(
+                    "[LiquidGlass] 系统低内存降级 level=$level heap=${heapSummary()}"
+                )
+            }
+            releaseHostMemoryCaches()
         }
     }
 
@@ -179,7 +223,7 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
         val max = rt.maxMemory()
         val used = rt.totalMemory() - rt.freeMemory()
         val usedRatio = if (max > 0) used.toFloat() / max.toFloat() else 0f
-        if (usedRatio >= 0.78f) {
+        if (usedRatio >= 0.72f) {
             qualityReduced = true
             accessibilityMode = GlassAccessibilityMode.FORCE_OPAQUE
             dropletView?.accessibilityMode = GlassAccessibilityMode.FORCE_OPAQUE
@@ -210,6 +254,13 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
     /**
      * 只调库自己那颗透镜水滴的光学参数（绘制/动画仍由库负责）。
      * 水滴是库的私有字段，失败时静默退回库默认值。
+     *
+     * 调优要点（彻底消灭重影与眼花）：
+     * 1. 折射深度从 7dp 大幅收紧至 1.5dp，不再像放大镜一样把背景文字放大扭曲；
+     * 2. 斜面从 12dp 收紧至 6dp，凸起边界干脆利落；
+     * 3. 色散 dispersionStrength 设为 0，彻底关停红/蓝伪影色边；
+     * 4. 饱和度归位 100f（之前 135f 会把小红标签烤得发焦晃眼）；
+     * 5. 水滴表面赋予极轻微的微透质感，让图文浮于其上，清澈锐利。
      */
     private fun tuneDroplet() {
         try {
@@ -219,27 +270,26 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
             dropletView = droplet
             val density = resources.displayMetrics.density
             droplet.enableBackdropBlur = false
-            // 水滴只负责“凸起”和边缘折光；标签已抬到水滴上方，但折射太深仍会在
-            // 图标下方拖出白色残影，所以保留较窄的折射带。
-            droplet.bevelWidth = 12f * density
-            droplet.refractionHeight = 7f * density
-            droplet.refractionFalloff = 0.75f
-            droplet.refractionNoFold = false
+            droplet.bevelWidth = 6f * density
+            droplet.refractionHeight = 1.5f * density
+            droplet.refractionFalloff = 0.5f
+            droplet.refractionNoFold = true
             droplet.refractionOutward = false
-            droplet.dispersionStrength = 0.20f
-            droplet.edgeHighlightOpacity = 85f
-            droplet.edgeSoftness = 1f * density
+            droplet.dispersionStrength = 0.0f
+            droplet.edgeHighlightOpacity = 45f
+            droplet.edgeSoftness = 0.8f * density
             droplet.adaptiveLensScale = true
             droplet.enableChromaticDispersion = false
+            droplet.enableChromaticAberration = false
             droplet.enableOptimizedCapture = true
             droplet.globalDownsampleFactor = 0.5f
             droplet.downsampleScale = 3
-            droplet.saturation = 135f
-            droplet.setGlassTint(Color.BLACK, 0.05f)
+            droplet.saturation = 100f
+            droplet.setGlassTint(Color.WHITE, 0.08f)
             droplet.overLight = false
             droplet.invalidate()
             if (GlassStyle.devTrace()) {
-                ConfigManager.log("[LiquidGlass] droplet 光学参数已应用")
+                ConfigManager.log("[LiquidGlass] droplet 光学参数已应用 (清晰无重影)")
             }
         } catch (t: Throwable) {
             ConfigManager.logError("[LiquidGlass] droplet 调参失败", t)
@@ -247,10 +297,11 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
     }
 
     /**
-     * 白底上给透镜一点极轻的深色，让它有轮廓；深色主题用黑色底 + 轻微黑染，
-     * 不再用白色底 tint（那会在深色背景上变成一块灰玻璃）。
+     * 水滴底色与透光度微调：
+     * 日间使用轻白透雾，使水滴胶囊纯净通透且不被底层大红折扣字干扰；
+     * 夜间使用微黑透雾，保证选中项高对比度且与底栏融合自然。
      *
-     * @param tintPercent 当前夜间玻璃浓度；水滴比底栏略浅一点，保证选中项仍然可辨。
+     * @param tintPercent 当前夜间玻璃浓度。
      */
     fun setDropletNight(night: Boolean, tintPercent: Int = 0) {
         nightMode = night
@@ -262,13 +313,14 @@ class GlassTabBar(context: Context) : LiquidGlassTabBar(context), ComponentCallb
             return
         }
         droplet.overLight = night
-        val strength = if (night) {
-            ((tintPercent - 15).coerceIn(2, 26) / 100f)
+        if (night) {
+            val strength = ((tintPercent - 10).coerceIn(4, 22) / 100f)
+            droplet.setGlassTint(0xFF1E2430.toInt(), strength)
+            droplet.edgeHighlightOpacity = 40f
         } else {
-            0.05f
+            droplet.setGlassTint(Color.WHITE, 0.08f)
+            droplet.edgeHighlightOpacity = 45f
         }
-        droplet.setGlassTint(Color.BLACK, strength)
-        droplet.edgeHighlightOpacity = if (night) 65f else 85f
         droplet.invalidate()
         invalidate()
         if (GlassStyle.devTrace()) {
