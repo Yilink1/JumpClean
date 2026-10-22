@@ -21,11 +21,13 @@ object TabIcons {
     fun forTitle(title: CharSequence): Drawable {
         val text = title.toString()
         val kind = when {
-            text.contains("首页") || text.contains("主页") || text.contains("home", true) -> Kind.JOYCON
-            text.contains("发现") || text.contains("探索") || text.contains("频道") -> Kind.FLAME
+            text.contains("首页") || text.contains("主页") || text.contains("home", true) -> Kind.HOME
+            text.contains("发现") || text.contains("探索") || text.contains("频道") -> Kind.COMPASS
             text.contains("游戏") -> Kind.GAMEPAD
             text.contains("我的") || text.contains("个人") || text.contains("mine", true) -> Kind.PERSON
-            text.contains("赏") || text.contains("抽") || text.contains("礼") || text.contains("游戏") -> Kind.GIFT
+            // 「Jump 赏」和「抽奖」经常同时出现，不能都画成礼物盒；抽奖用星芒区分。
+            text.contains("抽") -> Kind.SPARKLE
+            text.contains("赏") || text.contains("礼") -> Kind.GIFT
             else -> Kind.SPARKLE
         }
         return GlyphDrawable(kind)

@@ -20,7 +20,6 @@ object SplashHooks {
 
     private var processStartTime = 0L
     private var mainActivitySeen = false
-    private val voucherHooked = AtomicBoolean(false)
     private val dialogFragmentHooked = AtomicBoolean(false)
 
     @Volatile
@@ -35,70 +34,10 @@ object SplashHooks {
         hookStartupDelayCompress(lpparam)
         hookActivityFlowProbe()
         hookFakeNotificationPermission(lpparam)
-        ensureVoucherDialogHooked(lpparam.classLoader)
+        // 只拦最终的 DialogFragment.show，不再拦 ViewModel 的协程/请求方法。
+        // 之前拦协程会让宿主一直重试同一个请求（日志里出现 x39），造成内存和主线程抖动。
         hookDialogFragmentShow(lpparam.classLoader)
         hookNotificationAd(lpparam.classLoader)
-    }
-
-    private fun ensureVoucherDialogHooked(classLoader: ClassLoader) {
-        if (voucherHooked.get()) return
-
-        val targetClassNames = listOf(
-            "com.vgjump.jump.ui.main.MainViewModel",
-            "com.vgjump.jump.ui.main.g"
-        )
-
-        var success = false
-        for (className in targetClassNames) {
-            val vmClass = XposedHelpers.findClassIfExists(className, classLoader) ?: continue
-            var hookedCount = 0
-
-            vmClass.declaredMethods.forEach { method ->
-                if (java.lang.reflect.Modifier.isAbstract(method.modifiers)) return@forEach
-                if (method.name.contains("Voucher", ignoreCase = true) ||
-                    method.name.contains("DialogData", ignoreCase = true)) {
-                    try {
-                        XposedBridge.hookMethod(method, object : XC_MethodHook() {
-                            override fun beforeHookedMethod(param: MethodHookParam) {
-                                if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
-                                    param.result = null
-                                    ConfigManager.log("✔ [弹窗阻断] 拦截营销弹窗请求: ${vmClass.simpleName}.${method.name}")
-                                }
-                            }
-                        })
-                        hookedCount++
-                    } catch (e: Throwable) {
-                        ConfigManager.log("Hook ${method.name} 异常: ${e.message}")
-                    }
-                }
-            }
-
-            // 拦截协程类 MainViewModel$getVoucherDialogData$1
-            val coroutineClassName = "$className\$getVoucherDialogData\$1"
-            val coroutineClass = XposedHelpers.findClassIfExists(coroutineClassName, classLoader)
-            if (coroutineClass != null) {
-                try {
-                    XposedBridge.hookAllMethods(coroutineClass, "invokeSuspend", object : XC_MethodHook() {
-                        override fun beforeHookedMethod(param: MethodHookParam) {
-                            if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
-                                param.result = Unit
-                                ConfigManager.log("✔ [弹窗阻断] 拦截营销弹窗协程: $coroutineClassName")
-                            }
-                        }
-                    })
-                    hookedCount++
-                } catch (_: Throwable) {}
-            }
-
-            if (hookedCount > 0) {
-                success = true
-                ConfigManager.log("[Hook] 营销弹窗屏蔽挂载就绪 ($className, $hookedCount 个挂载点)")
-            }
-        }
-
-        if (success) {
-            voucherHooked.set(true)
-        }
     }
 
     private fun hookDialogFragmentShow(classLoader: ClassLoader) {
@@ -295,7 +234,6 @@ object SplashHooks {
                     try {
                         val app = param.thisObject as? Application ?: return
                         ConfigManager.initAppContext(app)
-                        ensureVoucherDialogHooked(app.classLoader)
                         hookDialogFragmentShow(app.classLoader)
                     } catch (_: Throwable) {}
                 }
@@ -308,7 +246,6 @@ object SplashHooks {
                         val name = act.javaClass.name
                         if (name.contains("MainActivity")) {
                             mainActivitySeen = true
-                            ensureVoucherDialogHooked(act.classLoader)
                             hookDialogFragmentShow(act.classLoader)
                         } else if (name.contains("SplashActivity")) {
                             mainActivitySeen = false
@@ -324,7 +261,6 @@ object SplashHooks {
                         ConfigManager.initAppContext(act)
                         currentActivityName = act.javaClass.name
                         if (act.javaClass.name.contains("MainActivity")) {
-                            ensureVoucherDialogHooked(act.classLoader)
                             hookDialogFragmentShow(act.classLoader)
                         }
                     } catch (_: Exception) {}

@@ -356,9 +356,17 @@ object LiquidGlassHooks {
 
     private fun readVisibleTabs(rg: RadioGroup): List<Pair<String, Int>> {
         val out = mutableListOf<Pair<String, Int>>()
+        val hideWeb = ConfigManager.isFeatureEnabled(rg.context, JumpConstants.KEY_HIDE_WEB_TAB)
+        val hideLottery = ConfigManager.isFeatureEnabled(rg.context, JumpConstants.KEY_HIDE_LOTTERY_TAB)
         for (i in 0 until rg.childCount) {
             val rb = rg.getChildAt(i) as? RadioButton ?: continue
-            if (rb.visibility == View.VISIBLE) out.add(rb.text.toString() to rb.id)
+            if (rb.visibility != View.VISIBLE) continue
+            val title = rb.text?.toString() ?: continue
+            // 宿主 3.30.35 起底栏 ID 可能变化，原按 id 隐藏的逻辑会漏掉；
+            // 这里按标题兜底过滤，保证玻璃条不会把「Jump 赏 / 抽奖」重新显示出来。
+            if (hideWeb && title.contains("赏")) continue
+            if (hideLottery && title.contains("抽")) continue
+            out.add(title to rb.id)
         }
         return out
     }
@@ -500,6 +508,10 @@ object LiquidGlassHooks {
      */
     private fun disableBarTouch(rgMainTab: RadioGroup) {
         rgMainTab.alpha = 0f
+        // 原底栏已经视觉隐藏；如果仍留在无障碍树里，读屏会念出两套 Tab，
+        // 也会在每次布局时产生无意义的无障碍事件。
+        rgMainTab.importantForAccessibility =
+            View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         rgMainTab.isClickable = false
         rgMainTab.isFocusable = false
         for (i in 0 until rgMainTab.childCount) {
@@ -515,6 +527,7 @@ object LiquidGlassHooks {
     /** 卸载时恢复原底栏触摸 */
     private fun restoreBarTouch(rgMainTab: RadioGroup) {
         rgMainTab.alpha = 1f
+        rgMainTab.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
         rgMainTab.isClickable = true
         rgMainTab.isFocusable = true
         for (i in 0 until rgMainTab.childCount) {
