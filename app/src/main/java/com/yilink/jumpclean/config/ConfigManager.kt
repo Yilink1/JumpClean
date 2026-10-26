@@ -4,8 +4,6 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import com.yilink.jumpclean.HookUtils
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.io.File
 import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicInteger
@@ -81,8 +79,8 @@ object ConfigManager {
         }
     }
 
-    fun init(lpparam: XC_LoadPackage.LoadPackageParam) {
-        targetClassLoader = lpparam.classLoader
+    fun init(classLoader: ClassLoader?) {
+        targetClassLoader = classLoader
     }
 
     fun initAppContext(context: Context) {
@@ -96,8 +94,8 @@ object ConfigManager {
     fun getValidAppContext(): Context? {
         appContextRef?.get()?.let { return it }
         return try {
-            val activityThread = XposedHelpers.findClass("android.app.ActivityThread", targetClassLoader)
-            (XposedHelpers.callStaticMethod(activityThread, "currentApplication") as? Context)?.also {
+            val activityThread = com.yilink.jumpclean.XposedCompat.findClass("android.app.ActivityThread", targetClassLoader)
+            (com.yilink.jumpclean.XposedCompat.callStaticMethod(activityThread, "currentApplication") as? Context)?.also {
                 initAppContext(it)
             }
         } catch (_: Throwable) {
@@ -122,6 +120,7 @@ object ConfigManager {
             JumpConstants.KEY_HIDE_GAME_FIND_AD,
             JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE,
             JumpConstants.KEY_HIDE_GAME_PRICE_ADS,
+            JumpConstants.KEY_PREVENT_WISHLIST_FLASH,
             JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV -> true
 
             JumpConstants.KEY_HIDE_PUBLISH_TOPIC,
@@ -206,8 +205,8 @@ object ConfigManager {
         val cl = classLoader ?: targetClassLoader ?: ConfigManager::class.java.classLoader
 
         try {
-            val activityThread = XposedHelpers.findClass("android.app.ActivityThread", cl)
-            val currentApp = XposedHelpers.callStaticMethod(activityThread, "currentApplication") as? Context
+            val activityThread = com.yilink.jumpclean.XposedCompat.findClass("android.app.ActivityThread", cl)
+            val currentApp = com.yilink.jumpclean.XposedCompat.callStaticMethod(activityThread, "currentApplication") as? Context
             if (currentApp != null) {
                 initAppContext(currentApp)
                 return isFeatureEnabled(currentApp, key)

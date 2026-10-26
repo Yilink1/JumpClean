@@ -34,6 +34,7 @@ object JumpConstants {
     const val KEY_HIDE_LOTTERY_TAB = "hide_lottery_tab"
     const val KEY_HIDE_MSG_PUSH_GUIDE = "hide_msg_push_guide"
     const val KEY_HIDE_WIDGET_VIP_TAG = "hide_widget_vip_tag"
+    const val KEY_PREVENT_WISHLIST_FLASH = "prevent_wishlist_flash"
     const val KEY_ENABLE_COPY = "enable_article_copy"
     const val KEY_HIDE_CONTENT_MEMBER_MASK = "hide_content_member_mask"
     const val KEY_ENABLE_DEBUG_LOG = "enable_debug_log"

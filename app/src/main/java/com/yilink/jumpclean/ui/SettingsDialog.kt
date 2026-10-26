@@ -121,6 +121,11 @@ object SettingsDialog {
             },
 
             SectionHeader("个人中心"),
+            SettingItem(
+                JumpConstants.KEY_PREVENT_WISHLIST_FLASH,
+                "平滑个人主页刷新",
+                desc = "抑制切换到「我的」时心愿单、游戏墙、动态等模块瞬时闪烁归零"
+            ),
             SettingItem(JumpConstants.KEY_HIDE_MEMBER_CARD, "隐藏 Jump+ 会员卡片"),
             SettingItem(JumpConstants.KEY_HIDE_MY_ORDER, "隐藏「我的订单」"),
             SettingItem(JumpConstants.KEY_HIDE_PHOTO_WALL, "隐藏截图展示墙"),
