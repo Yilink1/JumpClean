@@ -110,12 +110,13 @@ object SplashHooks {
                     val className = df.javaClass.name
                     val tag = param.args.lastOrNull() as? String ?: ""
 
-                    val isVoucher = className.contains("Voucher", ignoreCase = true) ||
-                            className.contains("discount", ignoreCase = true) ||
-                            tag.contains("voucher", ignoreCase = true) ||
-                            tag.contains("coupon", ignoreCase = true)
+                    // 仅精准拦截发现页与主界面的活动营销弹窗，坚决不误伤商城选券或普通功能弹窗
+                    val isMarketingDialog = className.contains("JumpNice", ignoreCase = true) ||
+                            className.contains("MemberCouponDialog", ignoreCase = true) ||
+                            tag == "dialog_activity" ||
+                            tag == "jump_nice_guide_dialog"
 
-                    if (isVoucher && ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
+                    if (isMarketingDialog && ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
                         param.result = null
                         ConfigManager.log("✔ [弹窗阻断] 拦截营销 DialogFragment: $className (tag=$tag)")
                     }

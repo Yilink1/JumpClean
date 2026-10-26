@@ -745,6 +745,24 @@ object ViewCleanHooks {
                         }
                     }
 
+                    // 10. 营销活动与引导弹窗网络断电：/jump/nice/free_nice_dialog 与 /jump/ad/game/dialog (发现页新人礼/活动营销弹窗)
+                    if (urlStr.contains("/jump/nice/free_nice_dialog") || urlStr.contains("/jump/ad/game/dialog")) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
+                            try {
+                                val resp = createMockJsonResponse(
+                                    classLoader,
+                                    request,
+                                    """{"success":true,"code":200,"msg":"success","data":null}"""
+                                )
+                                val endpoint = if (urlStr.contains("free_nice")) "free_nice_dialog" else "ad/game/dialog"
+                                ConfigManager.log("✔ [网络阻断] 拦截营销弹窗配置接口: $endpoint")
+                                return@newProxyInstance resp
+                            } catch (e: Throwable) {
+                                ConfigManager.logError("✘ 伪造营销弹窗响应失败", e)
+                            }
+                        }
+                    }
+
                     // 9. 发现页推荐模块数据网络断电：findGame/list_new, findPageV2/* (大家都在买/近期热门/收藏精选/40元以下/即将发售)
                     if (urlStr.contains("/jump/findGame/list_new") ||
                         urlStr.contains("/jump/findPageV2/favorite") ||
