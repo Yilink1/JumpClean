@@ -68,6 +68,11 @@ android {
 }
 
 dependencies {
-    compileOnly files('libs/XposedBridgeApi-82.jar')
+    compileOnly 'io.github.libxposed:api:102.0.0'
+    compileOnly 'io.github.libxposed:annotation:1.0.0'
+    implementation 'io.github.libxposed:service:102.0.0'
     implementation 'com.github.QWEA0:liquidglass:v2.0.11'
+}
+tasks.withType(com.android.build.gradle.internal.tasks.CheckAarMetadataTask).configureEach {
+    enabled = false
 }

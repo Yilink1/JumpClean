@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-sdk tools:overrideLibrary="io.github.libxposed.service, io.github.libxposed.service.interfaces" />
 
     <application
         android:allowBackup="false"
         android:label="JumpClean"
+        android:description="@string/xposed_description"
         android:supportsRtl="true">
 
         <meta-data
@@ -11,10 +15,10 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="Jump 社区净化增强模块" />
+            android:value="Jump 社区净化与体验增强模块" />
         <meta-data
             android:name="xposedminversion"
-            android:value="82" />
+            android:value="93" />
         <!-- 静态作用域声明：标准名称为 xposedscope，引用 @array/xposedscope -->
         <meta-data
             android:name="xposedscope"

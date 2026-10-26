@@ -6,8 +6,6 @@ import android.view.ViewGroup
 import android.os.Handler
 import android.os.Looper
 import com.yilink.jumpclean.config.ConfigManager
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
 import java.io.File
 import java.lang.reflect.Field
 import java.text.SimpleDateFormat
@@ -208,7 +206,7 @@ object HookUtils {
         val time = getCurrentTimeString()
         val formatted = if (time.isNotEmpty()) "[$time] $msg" else msg
         appendHistory(formatted)
-        XposedBridge.log("[$TAG] $msg")
+        XposedCompat.module?.log(android.util.Log.INFO, TAG, msg) ?: android.util.Log.i(TAG, msg)
     }
 
     fun err(msg: String, t: Throwable? = null) {
@@ -219,8 +217,8 @@ object HookUtils {
         } else ""
         val formatted = if (time.isNotEmpty()) "[$time] [ERR] $msg$errorDetail" else "[ERR] $msg$errorDetail"
         appendHistory(formatted, immediateFlush = true)
-        XposedBridge.log("[$TAG] [ERR] $msg")
-        if (t != null) XposedBridge.log(t)
+        XposedCompat.module?.log(android.util.Log.ERROR, TAG, msg) ?: android.util.Log.e(TAG, msg)
+        if (t != null) { XposedCompat.module?.log(android.util.Log.ERROR, TAG, msg, t) ?: android.util.Log.e(TAG, msg, t) }
     }
 
     /** 在 [view] 自身或浅层子孙里找 zhpan BannerViewPager（发现页轮播）。 */
@@ -235,7 +233,7 @@ object HookUtils {
 
     private fun callBannerLoop(pager: View, method: String): Boolean {
         return try {
-            XposedHelpers.callMethod(pager, method)
+            XposedCompat.callMethod(pager, method)
             true
         } catch (_: Throwable) {
             false
@@ -281,7 +279,7 @@ object HookUtils {
         // 含轮播的容器只设 GONE（见上）；并尽量停掉自动轮播（宿主混淆后 stopLoop 可能失败，仅尽力而为）。
         if (bannerPager != null) {
             val paused = try {
-                XposedHelpers.callMethod(bannerPager, "onPause")
+                XposedCompat.callMethod(bannerPager, "onPause")
                 true
             } catch (_: Throwable) {
                 false
@@ -350,7 +348,7 @@ object HookUtils {
         view.setPadding(state.paddingLeft, state.paddingTop, state.paddingRight, state.paddingBottom)
         findBannerPager(view)?.let {
             try {
-                XposedHelpers.callMethod(it, "onResume")
+                XposedCompat.callMethod(it, "onResume")
             } catch (_: Throwable) {}
         }
         view.requestLayout()
@@ -377,7 +375,7 @@ object HookUtils {
 
     fun safeCallStringGetter(obj: Any, methodName: String): String? {
         return try {
-            XposedHelpers.callMethod(obj, methodName) as? String
+            XposedCompat.callMethod(obj, methodName) as? String
         } catch (_: Throwable) {
             null
         }
@@ -399,7 +397,7 @@ object HookUtils {
 
     fun safeGetObjectField(obj: Any, fieldName: String): Any? {
         return try {
-            XposedHelpers.getObjectField(obj, fieldName)
+            XposedCompat.getObjectField(obj, fieldName)
         } catch (_: Throwable) {
             null
         }

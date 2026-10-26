@@ -20,8 +20,16 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import io.github.libxposed.service.XposedService
+import io.github.libxposed.service.XposedServiceHelper
 
-class SettingsActivity : Activity() {
+class SettingsActivity : Activity(), XposedServiceHelper.OnServiceListener {
+
+    companion object {
+        @Volatile
+        private var xposedService: XposedService? = null
+        private var isListenerRegistered = false
+    }
 
     // 激活卡片的可变视图引用：onResume 时刷新，避免状态变化后要杀进程才能更新
     private var activeCardRef: LinearLayout? = null
@@ -30,19 +38,50 @@ class SettingsActivity : Activity() {
     private var activeDescRef: TextView? = null
     private var lastActiveState: Boolean? = null
 
+    override fun onServiceBind(service: XposedService) {
+        xposedService = service
+        runOnUiThread {
+            refreshActivationState()
+        }
+    }
+
+    override fun onServiceDied(service: XposedService) {
+        if (xposedService == service) {
+            xposedService = null
+        }
+        runOnUiThread {
+            refreshActivationState()
+        }
+    }
+
     /**
-     * 激活状态锚点方法：
-     * 编译进 APK 时恒定返回 false。
-     * 当 LSPosed 模块被激活（自身在作用域内）时，MainHook 会精确 hook 这个方法并强制返回 true。
+     * 官方 libxposed API 102 激活自检判定：
+     * 收到 LSPosed 框架分发的 XposedService Binder 即代表模块在框架中已正确识别并激活。
      */
     private fun isActivated(): Boolean {
-        return false
+        return xposedService != null
+    }
+
+    private fun refreshActivationState() {
+        val active = isActivated()
+        if (lastActiveState != active) {
+            lastActiveState = active
+            updateActivationViews(active)
+        }
     }
 
     @SuppressLint("SetTextI18n")
     override fun onCreate(savedInstanceState: Bundle?) {
         requestWindowFeature(Window.FEATURE_NO_TITLE)
         super.onCreate(savedInstanceState)
+
+        // 注册官方 XposedService 监听器（仅需注册一次）
+        if (!isListenerRegistered) {
+            try {
+                XposedServiceHelper.registerListener(this)
+                isListenerRegistered = true
+            } catch (_: Throwable) {}
+        }
 
         val dp = { v: Int -> (v * resources.displayMetrics.density).toInt() }
 
@@ -336,12 +375,7 @@ class SettingsActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        // 在 LSPosed 里刚勾选模块后回到本页时重新检测，状态变化立即刷新卡片
-        val now = isActivated()
-        if (lastActiveState != now) {
-            lastActiveState = now
-            updateActivationViews(now)
-        }
+        refreshActivationState()
     }
 
     private fun updateActivationViews(isActive: Boolean) {
@@ -352,10 +386,12 @@ class SettingsActivity : Activity() {
             GradientDrawable.Orientation.LEFT_RIGHT,
             intArrayOf(themeStart, themeEnd)
         ).apply { cornerRadius = radius }
+
         checkIconRef?.apply {
             text = if (isActive) "✓" else "!"
             setTextColor(themeStart)
         }
+
         activeTitleRef?.text = if (isActive) "已激活" else "未激活"
         activeDescRef?.apply {
             text = if (isActive) "LSPosed / Hook 服务正常运行" else "请在 LSPosed 中勾选本模块与宿主"

@@ -1,5 +1,8 @@
 package com.yilink.jumpclean.hooks
 
+import com.yilink.jumpclean.XposedCompat
+import com.yilink.jumpclean.XposedCompat.MethodHookParam
+
 import android.app.Activity
 import android.app.Application
 import android.content.Intent
@@ -9,10 +12,6 @@ import android.os.SystemClock
 import android.util.SparseArray
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Function
 
@@ -27,17 +26,17 @@ object SplashHooks {
     var currentActivityName = ""
         private set
 
-    fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
+    fun hook(classLoader: ClassLoader) {
         processStartTime = SystemClock.uptimeMillis()
-        hookSplashInstantJump(lpparam)
-        hookByaztFastFail(lpparam)
-        hookSplashAdBase(lpparam)
-        hookStartupDelayCompress(lpparam)
+        hookSplashInstantJump(classLoader)
+        hookByaztFastFail(classLoader)
+        hookSplashAdBase(classLoader)
+        hookStartupDelayCompress(classLoader)
         hookActivityFlowProbe()
-        hookFakeNotificationPermission(lpparam)
-        ensureVoucherDialogHooked(lpparam.classLoader)
-        hookDialogFragmentShow(lpparam.classLoader)
-        hookNotificationAd(lpparam.classLoader)
+        hookFakeNotificationPermission(classLoader)
+        ensureVoucherDialogHooked(classLoader)
+        hookDialogFragmentShow(classLoader)
+        hookNotificationAd(classLoader)
     }
 
     private fun ensureVoucherDialogHooked(classLoader: ClassLoader) {
@@ -50,7 +49,7 @@ object SplashHooks {
 
         var success = false
         for (className in targetClassNames) {
-            val vmClass = XposedHelpers.findClassIfExists(className, classLoader) ?: continue
+            val vmClass = XposedCompat.findClassIfExists(className, classLoader) ?: continue
             var hookedCount = 0
 
             vmClass.declaredMethods.forEach { method ->
@@ -58,7 +57,7 @@ object SplashHooks {
                 if (method.name.contains("Voucher", ignoreCase = true) ||
                     method.name.contains("DialogData", ignoreCase = true)) {
                     try {
-                        XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                        XposedCompat.hookMethod(method, object : XposedCompat.MethodHookCallback() {
                             override fun beforeHookedMethod(param: MethodHookParam) {
                                 if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
                                     param.result = null
@@ -75,10 +74,10 @@ object SplashHooks {
 
             // 拦截协程类 MainViewModel$getVoucherDialogData$1
             val coroutineClassName = "$className\$getVoucherDialogData\$1"
-            val coroutineClass = XposedHelpers.findClassIfExists(coroutineClassName, classLoader)
+            val coroutineClass = XposedCompat.findClassIfExists(coroutineClassName, classLoader)
             if (coroutineClass != null) {
                 try {
-                    XposedBridge.hookAllMethods(coroutineClass, "invokeSuspend", object : XC_MethodHook() {
+                    XposedCompat.hookAllMethods(coroutineClass, "invokeSuspend", object : XposedCompat.MethodHookCallback() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
                             if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_VOUCHER_POPUP)) {
                                 param.result = Unit
@@ -104,8 +103,8 @@ object SplashHooks {
     private fun hookDialogFragmentShow(classLoader: ClassLoader) {
         if (dialogFragmentHooked.getAndSet(true)) return
         try {
-            val dfClass = XposedHelpers.findClassIfExists("androidx.fragment.app.DialogFragment", classLoader) ?: return
-            val dismissHook = object : XC_MethodHook() {
+            val dfClass = XposedCompat.findClassIfExists("androidx.fragment.app.DialogFragment", classLoader) ?: return
+            val dismissHook = object : XposedCompat.MethodHookCallback() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val df = param.thisObject ?: return
                     val className = df.javaClass.name
@@ -122,17 +121,17 @@ object SplashHooks {
                     }
                 }
             }
-            XposedBridge.hookAllMethods(dfClass, "show", dismissHook)
-            XposedBridge.hookAllMethods(dfClass, "showNow", dismissHook)
+            XposedCompat.hookAllMethods(dfClass, "show", dismissHook)
+            XposedCompat.hookAllMethods(dfClass, "showNow", dismissHook)
             ConfigManager.log("[Hook] DialogFragment 营销弹窗展示层拦截就绪")
         } catch (e: Throwable) {
             ConfigManager.log("Hook DialogFragment.show 异常: ${e.message}")
         }
     }
 
-    private fun hookSplashInstantJump(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val splashClass = XposedHelpers.findClassIfExists(
-            "com.vgjump.jump.ui.main.launch.SplashActivity", lpparam.classLoader
+    private fun hookSplashInstantJump(classLoader: ClassLoader) {
+        val splashClass = XposedCompat.findClassIfExists(
+            "com.vgjump.jump.ui.main.launch.SplashActivity", classLoader
         ) ?: return
 
         val jumpAction: (Activity) -> Unit = { activity ->
@@ -140,7 +139,7 @@ object SplashHooks {
             processStartTime = SystemClock.uptimeMillis()
             mainActivitySeen = false
             val isRestartFromIcon = activity.intent?.getBooleanExtra(JumpConstants.EXTRA_ICON_RESTART, false) == true
-            val isSkipEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_SKIP_SPLASH)
+            val isSkipEnabled = ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_SKIP_SPLASH)
 
             if ((isRestartFromIcon || isSkipEnabled) && !activity.isFinishing) {
                 try {
@@ -157,12 +156,12 @@ object SplashHooks {
             }
         }
 
-        XposedBridge.hookAllMethods(splashClass, "onCreate", object : XC_MethodHook() {
+        XposedCompat.hookAllMethods(splashClass, "onCreate", object : XposedCompat.MethodHookCallback() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 (param.thisObject as? Activity)?.let { jumpAction(it) }
             }
         })
-        XposedBridge.hookAllMethods(splashClass, "onResume", object : XC_MethodHook() {
+        XposedCompat.hookAllMethods(splashClass, "onResume", object : XposedCompat.MethodHookCallback() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 (param.thisObject as? Activity)?.let { jumpAction(it) }
             }
@@ -170,12 +169,12 @@ object SplashHooks {
         ConfigManager.log("[Hook] SplashActivity 穿透挂载完成")
     }
 
-    private fun hookByaztFastFail(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookByaztFastFail(classLoader: ClassLoader) {
         try {
-            val mgClass = XposedHelpers.findClassIfExists("com.byazt.oy.mg", lpparam.classLoader) ?: return
-            XposedBridge.hookAllMethods(mgClass, "loadAdByType", object : XC_MethodHook() {
+            val mgClass = XposedCompat.findClassIfExists("com.byazt.oy.mg", classLoader) ?: return
+            XposedCompat.hookAllMethods(mgClass, "loadAdByType", object : XposedCompat.MethodHookCallback() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    if (!ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_SKIP_SPLASH)) return
+                    if (!ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_SKIP_SPLASH)) return
                     try {
                         val type = param.args.getOrNull(0) as? Int ?: return
                         if (type != 3) return
@@ -214,7 +213,7 @@ object SplashHooks {
             }
             when (callback) {
                 is Function<*, *> -> @Suppress("UNCHECKED_CAST") (callback as Function<Any, Any?>).apply(event)
-                else -> XposedHelpers.callMethod(callback, "apply", event)
+                else -> XposedCompat.callMethod(callback, "apply", event)
             }
             true
         } catch (e: Exception) {
@@ -223,26 +222,26 @@ object SplashHooks {
         }
     }
 
-    private fun hookSplashAdBase(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookSplashAdBase(classLoader: ClassLoader) {
         try {
-            val splashBase = XposedHelpers.findClassIfExists("com.byazt.se.a", lpparam.classLoader) ?: return
+            val splashBase = XposedCompat.findClassIfExists("com.byazt.se.a", classLoader) ?: return
 
-            XposedBridge.hookAllMethods(splashBase, "apply", object : XC_MethodHook() {
+            XposedCompat.hookAllMethods(splashBase, "apply", object : XposedCompat.MethodHookCallback() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    if (!ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_SKIP_SPLASH)) return
+                    if (!ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_SKIP_SPLASH)) return
                     try {
                         val sparseArray = param.args[0] as? SparseArray<*> ?: return
-                        val pluginValueSet = XposedHelpers.callStaticMethod(
-                            XposedHelpers.findClass("com.byazt.evl.vf", lpparam.classLoader),
+                        val pluginValueSet = XposedCompat.callStaticMethod(
+                            XposedCompat.findClass("com.byazt.evl.vf", classLoader),
                             "vf", sparseArray
                         )
-                        val valueSet = XposedHelpers.callMethod(pluginValueSet, "a")
-                        val cmdCode = XposedHelpers.callMethod(valueSet, "intValue", -99999987) as Int
+                        val valueSet = XposedCompat.callMethod(pluginValueSet, "a")
+                        val cmdCode = XposedCompat.callMethod(valueSet, "intValue", -99999987) as Int
 
                         if (cmdCode == 110108 || cmdCode == 110109) {
                             param.result = null
                             try {
-                                XposedHelpers.callMethod(param.thisObject, "hideSkipButton")
+                                XposedCompat.callMethod(param.thisObject, "hideSkipButton")
                             } catch (_: Exception) {}
                         }
                     } catch (_: Exception) {}
@@ -254,16 +253,16 @@ object SplashHooks {
         }
     }
 
-    private fun hookStartupDelayCompress(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookStartupDelayCompress(classLoader: ClassLoader) {
         try {
-            XposedHelpers.findAndHookMethod(
+            XposedCompat.findAndHookMethod(
                 Handler::class.java,
                 "postDelayed",
                 Runnable::class.java,
                 Long::class.javaPrimitiveType,
-                object : XC_MethodHook() {
+                object : XposedCompat.MethodHookCallback() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
-                        if (!ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_SKIP_SPLASH)) return
+                        if (!ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_SKIP_SPLASH)) return
                         try {
                             val delay = param.args[1] as? Long ?: return
                             val sinceStart = if (processStartTime > 0L)
@@ -290,7 +289,7 @@ object SplashHooks {
 
     private fun hookActivityFlowProbe() {
         try {
-            XposedBridge.hookAllMethods(Application::class.java, "onCreate", object : XC_MethodHook() {
+            XposedCompat.hookAllMethods(Application::class.java, "onCreate", object : XposedCompat.MethodHookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val app = param.thisObject as? Application ?: return
@@ -300,7 +299,7 @@ object SplashHooks {
                     } catch (_: Throwable) {}
                 }
             })
-            XposedBridge.hookAllMethods(Activity::class.java, "onCreate", object : XC_MethodHook() {
+            XposedCompat.hookAllMethods(Activity::class.java, "onCreate", object : XposedCompat.MethodHookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val act = param.thisObject as? Activity ?: return
@@ -317,7 +316,7 @@ object SplashHooks {
                     } catch (_: Exception) {}
                 }
             })
-            XposedBridge.hookAllMethods(Activity::class.java, "onResume", object : XC_MethodHook() {
+            XposedCompat.hookAllMethods(Activity::class.java, "onResume", object : XposedCompat.MethodHookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val act = param.thisObject as? Activity ?: return
@@ -330,7 +329,7 @@ object SplashHooks {
                     } catch (_: Exception) {}
                 }
             })
-            XposedBridge.hookAllMethods(Activity::class.java, "onDestroy", object : XC_MethodHook() {
+            XposedCompat.hookAllMethods(Activity::class.java, "onDestroy", object : XposedCompat.MethodHookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val act = param.thisObject as? Activity ?: return
@@ -348,19 +347,19 @@ object SplashHooks {
         }
     }
 
-    private fun hookFakeNotificationPermission(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val returnTrueHook = object : XC_MethodHook() {
+    private fun hookFakeNotificationPermission(classLoader: ClassLoader) {
+        val returnTrueHook = object : XposedCompat.MethodHookCallback() {
             override fun beforeHookedMethod(param: MethodHookParam) {
-                if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_MSG_PUSH_GUIDE)) {
+                if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_MSG_PUSH_GUIDE)) {
                     param.result = true
                 }
             }
         }
 
         try {
-            val compatClass = XposedHelpers.findClassIfExists("androidx.core.app.NotificationManagerCompat", lpparam.classLoader)
+            val compatClass = XposedCompat.findClassIfExists("androidx.core.app.NotificationManagerCompat", classLoader)
             if (compatClass != null) {
-                XposedHelpers.findAndHookMethod(compatClass, "areNotificationsEnabled", returnTrueHook)
+                XposedCompat.findAndHookMethod(compatClass, "areNotificationsEnabled", returnTrueHook)
                 ConfigManager.log("[Hook] NotificationManagerCompat 权限伪造已就绪")
             }
         } catch (e: Exception) {
@@ -368,9 +367,9 @@ object SplashHooks {
         }
 
         try {
-            val nmClass = XposedHelpers.findClassIfExists("android.app.NotificationManager", lpparam.classLoader)
+            val nmClass = XposedCompat.findClassIfExists("android.app.NotificationManager", classLoader)
             if (nmClass != null) {
-                XposedHelpers.findAndHookMethod(nmClass, "areNotificationsEnabled", returnTrueHook)
+                XposedCompat.findAndHookMethod(nmClass, "areNotificationsEnabled", returnTrueHook)
                 ConfigManager.log("[Hook] 原生 NotificationManager 权限伪造已就绪")
             }
         } catch (e: Exception) {
@@ -386,13 +385,13 @@ object SplashHooks {
 
         // 核心架构层拦截：GlobalViewModel.onReceiveMessage (阻止前台消息处理与震动横幅派发)
         try {
-            val globalVmClass = XposedHelpers.findClassIfExists(
+            val globalVmClass = XposedCompat.findClassIfExists(
                 "com.vgjump.jump.ui.main.func.GlobalViewModel", classLoader
             ) ?: return
 
             globalVmClass.declaredMethods.forEach { method ->
                 if (method.name == "onReceiveMessage") {
-                    XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                    XposedCompat.hookMethod(method, object : XposedCompat.MethodHookCallback() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
                             if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_BLOCK_NOTIFICATION_AD)) {
                                 param.result = null

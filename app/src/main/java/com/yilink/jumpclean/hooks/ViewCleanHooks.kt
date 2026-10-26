@@ -1,5 +1,8 @@
 package com.yilink.jumpclean.hooks
 
+import com.yilink.jumpclean.XposedCompat
+import com.yilink.jumpclean.XposedCompat.MethodHookParam
+
 import android.app.Activity
 import android.os.SystemClock
 import android.view.View
@@ -7,10 +10,6 @@ import android.view.ViewGroup
 import com.yilink.jumpclean.HookUtils
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.util.Collections
 import java.util.WeakHashMap
 
@@ -25,21 +24,21 @@ object ViewCleanHooks {
     @Volatile private var cachedWebTabId = 0
     @Volatile private var lotteryTabWasHidden = false
 
-    fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
-        hookMainActivityUI(lpparam)
-        hookTabVisibilityIntercept(lpparam)
-        hookAdViews(lpparam)
-        hookContentDetailMemberMask(lpparam)
-        hookGameDetailClean(lpparam)
+    fun hook(classLoader: ClassLoader) {
+        hookMainActivityUI(classLoader)
+        hookTabVisibilityIntercept(classLoader)
+        hookAdViews(classLoader)
+        hookContentDetailMemberMask(classLoader)
+        hookGameDetailClean(classLoader)
     }
 
-    private fun hookTabVisibilityIntercept(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookTabVisibilityIntercept(classLoader: ClassLoader) {
         try {
-            XposedHelpers.findAndHookMethod(
+            XposedCompat.findAndHookMethod(
                 View::class.java,
                 "setVisibility",
                 Int::class.javaPrimitiveType,
-                object : XC_MethodHook() {
+                object : XposedCompat.MethodHookCallback() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         val view = param.thisObject as? View ?: return
                         val id = view.id
@@ -53,15 +52,15 @@ object ViewCleanHooks {
                         }
 
                         if (cachedRedDotId != 0 && id == cachedRedDotId) {
-                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_LOTTERY_TAB)) {
+                            if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_LOTTERY_TAB)) {
                                 param.args[0] = View.GONE
                             }
                         } else if (cachedLotteryTabId != 0 && id == cachedLotteryTabId) {
-                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_LOTTERY_TAB)) {
+                            if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_LOTTERY_TAB)) {
                                 param.args[0] = View.GONE
                             }
                         } else if (cachedWebTabId != 0 && id == cachedWebTabId) {
-                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_WEB_TAB)) {
+                            if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_WEB_TAB)) {
                                 param.args[0] = View.GONE
                             }
                         }
@@ -74,11 +73,11 @@ object ViewCleanHooks {
         }
     }
 
-    private fun hookMainActivityUI(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val mainActivityClass = XposedHelpers.findClassIfExists("com.vgjump.jump.ui.main.MainActivity", lpparam.classLoader) ?: return
+    private fun hookMainActivityUI(classLoader: ClassLoader) {
+        val mainActivityClass = XposedCompat.findClassIfExists("com.vgjump.jump.ui.main.MainActivity", classLoader) ?: return
         try {
-            XposedHelpers.findAndHookMethod(mainActivityClass, "onCreate",
-                android.os.Bundle::class.java, object : XC_MethodHook() {
+            XposedCompat.findAndHookMethod(mainActivityClass, "onCreate",
+                android.os.Bundle::class.java, object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         try {
                             val activity = param.thisObject as Activity
@@ -247,10 +246,10 @@ object ViewCleanHooks {
         }
     }
 
-    private fun hookAdViews(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookAdViews(classLoader: ClassLoader) {
         try {
-            val nativeAdClass = XposedHelpers.findClassIfExists("com.qq.e.ads.nativ.widget.NativeAdContainer", lpparam.classLoader) ?: return
-            val expressAdClass = XposedHelpers.findClassIfExists("com.qq.e.ads.nativ.NativeExpressADView", lpparam.classLoader)
+            val nativeAdClass = XposedCompat.findClassIfExists("com.qq.e.ads.nativ.widget.NativeAdContainer", classLoader) ?: return
+            val expressAdClass = XposedCompat.findClassIfExists("com.qq.e.ads.nativ.NativeExpressADView", classLoader)
 
             var lastNativeAdLogTime = 0L
             val collapseAdAction: (View) -> Unit = { view ->
@@ -267,7 +266,7 @@ object ViewCleanHooks {
             }
 
             val hookAdClass = { targetCls: Class<*> ->
-                XposedBridge.hookAllConstructors(targetCls, object : XC_MethodHook() {
+                XposedCompat.hookAllConstructors(targetCls, object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         try {
                             val view = param.thisObject as? View ?: return
@@ -278,7 +277,7 @@ object ViewCleanHooks {
                     }
                 })
 
-                XposedBridge.hookAllMethods(targetCls, "setVisibility", object : XC_MethodHook() {
+                XposedCompat.hookAllMethods(targetCls, "setVisibility", object : XposedCompat.MethodHookCallback() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         try {
                             val view = param.thisObject as? View ?: return
@@ -298,7 +297,7 @@ object ViewCleanHooks {
                 hookAdClass(expressAdClass)
             }
 
-            XposedHelpers.findAndHookMethod(View::class.java, "onAttachedToWindow", object : XC_MethodHook() {
+            XposedCompat.findAndHookMethod(View::class.java, "onAttachedToWindow", object : XposedCompat.MethodHookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val view = param.thisObject as? View ?: return
@@ -315,13 +314,13 @@ object ViewCleanHooks {
         }
     }
 
-    private fun hookContentDetailMemberMask(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookContentDetailMemberMask(classLoader: ClassLoader) {
         val targetActivities = listOf(
             "com.vgjump.jump.ui.content.detail.ContentDetailActivity",
             "com.vgjump.jump.ui.content.detail.CommentDetailActivity"
         )
 
-        val maskHook = object : XC_MethodHook() {
+        val maskHook = object : XposedCompat.MethodHookCallback() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 try {
                     val activity = param.thisObject as? Activity ?: return
@@ -345,9 +344,9 @@ object ViewCleanHooks {
         }
 
         targetActivities.forEach { className ->
-            val clazz = XposedHelpers.findClassIfExists(className, lpparam.classLoader) ?: return@forEach
-            XposedBridge.hookAllMethods(clazz, "onCreate", maskHook)
-            XposedBridge.hookAllMethods(clazz, "onResume", object : XC_MethodHook() {
+            val clazz = XposedCompat.findClassIfExists(className, classLoader) ?: return@forEach
+            XposedCompat.hookAllMethods(clazz, "onCreate", maskHook)
+            XposedCompat.hookAllMethods(clazz, "onResume", object : XposedCompat.MethodHookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val activity = param.thisObject as? Activity ?: return
                     applyContentDetailMemberMaskHide(activity)
@@ -387,25 +386,25 @@ object ViewCleanHooks {
 
     private val layoutHookedActivities = Collections.newSetFromMap(WeakHashMap<Activity, Boolean>())
 
-    private fun hookGameDetailClean(lpparam: XC_LoadPackage.LoadPackageParam) {
-        hookGameDetailData(lpparam)
-        hookGameDetailUI(lpparam)
-        hookGameDetailNetwork(lpparam)
+    private fun hookGameDetailClean(classLoader: ClassLoader) {
+        hookGameDetailData(classLoader)
+        hookGameDetailUI(classLoader)
+        hookGameDetailNetwork(classLoader)
     }
 
-    private fun hookGameDetailData(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookGameDetailData(classLoader: ClassLoader) {
         try {
             val candidateVmFindAdClasses = listOf(
                 "com.vgjump.jump.ui.game.detail.home.GameDetailHomeViewModel",
                 "com.vgjump.jump.ui.game.detail.GameDetailHomeViewModel"
             )
             for (className in candidateVmFindAdClasses) {
-                val homeVmClass = XposedHelpers.findClassIfExists(className, lpparam.classLoader) ?: continue
+                val homeVmClass = XposedCompat.findClassIfExists(className, classLoader) ?: continue
                 homeVmClass.declaredMethods.forEach { method ->
                     if (method.name.contains("findad", ignoreCase = true)) {
-                        XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                        XposedCompat.hookMethod(method, object : XposedCompat.MethodHookCallback() {
                             override fun beforeHookedMethod(param: MethodHookParam) {
-                                if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_FIND_AD)) {
+                                if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_GAME_FIND_AD)) {
                                     param.result = null
                                 }
                             }
@@ -422,17 +421,17 @@ object ViewCleanHooks {
                 "com.vgjump.jump.ui.game.OrderRecentlyKt"
             )
             for (className in candidateOrderRecentlyClasses) {
-                val orderClazz = XposedHelpers.findClassIfExists(className, lpparam.classLoader) ?: continue
-                XposedBridge.hookAllMethods(orderClazz, "shouldShowOrderRecentlyBanner", object : XC_MethodHook() {
+                val orderClazz = XposedCompat.findClassIfExists(className, classLoader) ?: continue
+                XposedCompat.hookAllMethods(orderClazz, "shouldShowOrderRecentlyBanner", object : XposedCompat.MethodHookCallback() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE)) {
                             param.result = false
                         }
                     }
                 })
-                XposedBridge.hookAllMethods(orderClazz, "toOrderRecentlyBannerItems", object : XC_MethodHook() {
+                XposedCompat.hookAllMethods(orderClazz, "toOrderRecentlyBannerItems", object : XposedCompat.MethodHookCallback() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE)) {
                             param.result = emptyList<Any>()
                         }
                     }
@@ -446,12 +445,12 @@ object ViewCleanHooks {
                 "com.vgjump.jump.ui.game.detail.home.GameDetailViewModel"
             )
             for (className in candidateVmClasses) {
-                val vmClazz = XposedHelpers.findClassIfExists(className, lpparam.classLoader) ?: continue
+                val vmClazz = XposedCompat.findClassIfExists(className, classLoader) ?: continue
                 vmClazz.declaredMethods.forEach { method ->
                     if (method.name.contains("getOrderSlideShow", ignoreCase = true)) {
-                        XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                        XposedCompat.hookMethod(method, object : XposedCompat.MethodHookCallback() {
                             override fun beforeHookedMethod(param: MethodHookParam) {
-                                if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE)) {
+                                if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE)) {
                                     param.result = null
                                 }
                             }
@@ -464,12 +463,12 @@ object ViewCleanHooks {
         }
     }
 
-    private fun hookGameDetailUI(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookGameDetailUI(classLoader: ClassLoader) {
         val targetClass = "com.vgjump.jump.ui.game.detail.GameDetailActivity"
-        val clazz = XposedHelpers.findClassIfExists(targetClass, lpparam.classLoader) ?: return
+        val clazz = XposedCompat.findClassIfExists(targetClass, classLoader) ?: return
 
         try {
-            val lifecycleHook = object : XC_MethodHook() {
+            val lifecycleHook = object : XposedCompat.MethodHookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val activity = param.thisObject as? Activity ?: return
                     if (activity.javaClass.name.contains("GameDetailActivity")) {
@@ -482,8 +481,8 @@ object ViewCleanHooks {
 
             var c: Class<*>? = clazz
             while (c != null && c != Activity::class.java) {
-                XposedBridge.hookAllMethods(c, "onResume", lifecycleHook)
-                XposedBridge.hookAllMethods(c, "onCreate", lifecycleHook)
+                XposedCompat.hookAllMethods(c, "onResume", lifecycleHook)
+                XposedCompat.hookAllMethods(c, "onCreate", lifecycleHook)
                 c = c.superclass
             }
             ConfigManager.log("[Hook] 游戏折扣页 UI 净化已就绪")
@@ -554,28 +553,28 @@ object ViewCleanHooks {
 
 
 
-    private fun hookGameDetailNetwork(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookGameDetailNetwork(classLoader: ClassLoader) {
         try {
-            val builderClass = XposedHelpers.findClassIfExists("okhttp3.OkHttpClient\$Builder", lpparam.classLoader) ?: return
-            val interceptorClass = XposedHelpers.findClassIfExists("okhttp3.Interceptor", lpparam.classLoader) ?: return
+            val builderClass = XposedCompat.findClassIfExists("okhttp3.OkHttpClient\$Builder", classLoader) ?: return
+            val interceptorClass = XposedCompat.findClassIfExists("okhttp3.Interceptor", classLoader) ?: return
 
             val interceptorProxy = java.lang.reflect.Proxy.newProxyInstance(
-                lpparam.classLoader,
+                classLoader,
                 arrayOf(interceptorClass)
             ) { _, method, args ->
                 if (method.name == "intercept" && args != null && args.isNotEmpty()) {
                     val chain = args[0]
-                    val request = XposedHelpers.callMethod(chain, "request")
-                    val urlStr = XposedHelpers.callMethod(request, "url")?.toString() ?: ""
+                    val request = XposedCompat.callMethod(chain, "request") ?: return@newProxyInstance null
+                    val urlStr = XposedCompat.callMethod(request, "url")?.toString() ?: ""
 
                     val proceedMethod = chain.javaClass.methods.firstOrNull { it.name == "proceed" && it.parameterTypes.size == 1 }
 
                     // 1. 动态购买弹幕纯网络断电：/jmall/order/recently 直接返回空数据
                     if (urlStr.contains("/jmall/order/recently")) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_GAME_DYNAMIC_BUBBLE)) {
                             try {
                                 val resp = createMockJsonResponse(
-                                    lpparam.classLoader,
+                                    classLoader,
                                     request,
                                     """{"success":true,"code":200,"msg":"成功","data":[]}"""
                                 )
@@ -589,10 +588,10 @@ object ViewCleanHooks {
 
                     // 1.5 二手比价纯网络断电：/jmall/second_hand/sell_supplier_quotation 直接返回空数据
                     if (urlStr.contains("/jmall/second_hand/sell_supplier_quotation")) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_SECOND_HAND)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_GAME_SECOND_HAND)) {
                             try {
                                 val resp = createMockJsonResponse(
-                                    lpparam.classLoader,
+                                    classLoader,
                                     request,
                                     """{"success":true,"code":200,"msg":"成功","data":[]}"""
                                 )
@@ -606,10 +605,10 @@ object ViewCleanHooks {
 
                     // 2. 低价榜推广项与导购链接清洗：/jump/price/getAllPriceByGame (方案 B：过滤前三假国家广告 + 移除各国 shopLink 去购买)
                     if (urlStr.contains("/jump/price/getAllPriceByGame")) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_PRICE_ADS)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_GAME_PRICE_ADS)) {
                             val originalResponse = proceedSafe(proceedMethod, chain, request)
                             try {
-                                val cleaned = cleanPriceResponse(lpparam.classLoader, originalResponse)
+                                val cleaned = cleanPriceResponse(classLoader, originalResponse)
                                 ConfigManager.log("✔ [网络清洗] 过滤低价榜推广项与导购链接 (/jump/price/getAllPriceByGame)")
                                 return@newProxyInstance cleaned
                             } catch (e: Throwable) {
@@ -621,10 +620,10 @@ object ViewCleanHooks {
 
                     // 3. 游戏扩展信息清洗：/jump/game/ext (移除底栏 preSale 租卡体验 + 充值 priceBanner + 详情页广告)
                     if (urlStr.contains("/jump/game/ext")) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_BOTTOM_TRIAL_AD)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_GAME_BOTTOM_TRIAL_AD)) {
                             val originalResponse = proceedSafe(proceedMethod, chain, request)
                             try {
-                                val cleaned = cleanGameExtResponse(lpparam.classLoader, originalResponse)
+                                val cleaned = cleanGameExtResponse(classLoader, originalResponse)
                                 ConfigManager.log("✔ [网络清洗] 剔除底栏购前体验与充值横幅 (/jump/game/ext)")
                                 return@newProxyInstance cleaned
                             } catch (e: Throwable) {
@@ -636,12 +635,12 @@ object ViewCleanHooks {
 
                     // 4. 促销卡券横幅网络断电：/jmall/product/detail (拦截进入游戏详情页时背景拉取的 Switch 香港点卡等营销商品)
                     if (urlStr.contains("/jmall/product/detail")) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_GAME_FIND_AD)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_GAME_FIND_AD)) {
                             // 仅在详情页背景静默请求 (from=1 或当前在 GameDetailActivity) 时阻断，不影响商城正向浏览
                             if (urlStr.contains("from=1") || SplashHooks.currentActivityName.contains("GameDetail")) {
                                 try {
                                     val resp = createMockJsonResponse(
-                                        lpparam.classLoader,
+                                        classLoader,
                                         request,
                                         """{"success":false,"code":404,"msg":"Ad blocked","data":null}"""
                                     )
@@ -656,10 +655,10 @@ object ViewCleanHooks {
 
                     // 5. 推荐流与帖子第三方商业广告网络断电：腾讯优量汇 / 广点通 SDK (gdt.qq.com)
                     if (urlStr.contains("gdt.qq.com") || urlStr.contains("gdt_mview")) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_POST_AD)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_POST_AD)) {
                             try {
                                 val resp = createMockJsonResponse(
-                                    lpparam.classLoader,
+                                    classLoader,
                                     request,
                                     """{"ret":-1,"msg":"No ad"}"""
                                 )
@@ -673,14 +672,14 @@ object ViewCleanHooks {
 
                     // 5.5 推荐流广告总控网络清洗：/jump/recommend/ad_conf (包含小酱推广贴 adType=8、Jumper热议 adType=106、推荐流商业卡片 adType=101)
                     if (urlStr.contains("/jump/recommend/ad_conf")) {
-                        val blockPromo = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
-                        val blockHot = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_HOT_DISCUSS)
-                        val blockAd = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_POST_AD)
+                        val blockPromo = ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
+                        val blockHot = ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_HOT_DISCUSS)
+                        val blockAd = ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_POST_AD)
 
                         if (blockPromo || blockHot || blockAd) {
                             val originalResponse = proceedSafe(proceedMethod, chain, request)
                             try {
-                                val cleaned = cleanRecommendAdConfResponse(lpparam.classLoader, originalResponse, blockPromo, blockHot, blockAd)
+                                val cleaned = cleanRecommendAdConfResponse(classLoader, originalResponse, blockPromo, blockHot, blockAd)
                                 return@newProxyInstance cleaned
                             } catch (e: Throwable) {
                                 ConfigManager.logError("✘ 清洗 /jump/recommend/ad_conf 异常", e)
@@ -691,12 +690,12 @@ object ViewCleanHooks {
 
                     // 6. 首页顶部枢纽数据清洗：/jump/interest_v2/home (按需清空轮播广告 bannerList 和顶部话题栏 promotionList)
                     if (urlStr.contains("/jump/interest_v2/home")) {
-                        val hideBanner = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_BANNER)
-                        val hideTopicList = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_TOPIC_LIST)
+                        val hideBanner = ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_BANNER)
+                        val hideTopicList = ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_TOPIC_LIST)
                         if (hideBanner || hideTopicList) {
                             val originalResponse = proceedSafe(proceedMethod, chain, request)
                             try {
-                                val cleaned = cleanHomeInterestResponse(lpparam.classLoader, originalResponse, hideBanner, hideTopicList)
+                                val cleaned = cleanHomeInterestResponse(classLoader, originalResponse, hideBanner, hideTopicList)
                                 val desc = when {
                                     hideBanner && hideTopicList -> "清空轮播与话题栏"
                                     hideBanner -> "清空轮播广告"
@@ -713,10 +712,10 @@ object ViewCleanHooks {
 
                     // 7. Jumper 热议广场网络断电：/jump/subject/squareList 直接返回空数据
                     if (urlStr.contains("/jump/subject/squareList")) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_HOT_DISCUSS)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_HOT_DISCUSS)) {
                             try {
                                 val resp = createMockJsonResponse(
-                                    lpparam.classLoader,
+                                    classLoader,
                                     request,
                                     """{"success":true,"code":0,"msg":"success","data":[]}"""
                                 )
@@ -730,10 +729,10 @@ object ViewCleanHooks {
 
                     // 8. 发现页顶部轮播广告网络断电：/jump/findGame/advert (返回空 data 数组，彻底避免适配器产生条目)
                     if (urlStr.contains("/jump/findGame/advert")) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_DISCOVER_BANNER)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_DISCOVER_BANNER)) {
                             try {
                                 val resp = createMockJsonResponse(
-                                    lpparam.classLoader,
+                                    classLoader,
                                     request,
                                     """{"success":true,"code":0,"msg":"success","data":[]}"""
                                 )
@@ -752,10 +751,10 @@ object ViewCleanHooks {
                         urlStr.contains("/jump/findPageV2/lt40") ||
                         urlStr.contains("/jump/findPageV2/comingSoon")
                     ) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_DISCOVER_MODULES)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_HIDE_DISCOVER_MODULES)) {
                             try {
                                 val resp = createMockJsonResponse(
-                                    lpparam.classLoader,
+                                    classLoader,
                                     request,
                                     """{"success":true,"code":0,"msg":"success","data":[]}"""
                                 )
@@ -776,15 +775,15 @@ object ViewCleanHooks {
                 method.invoke(this, *(args ?: emptyArray()))
             }
 
-            XposedHelpers.findAndHookMethod(builderClass, "build", object : XC_MethodHook() {
+            XposedCompat.findAndHookMethod(builderClass, "build", object : XposedCompat.MethodHookCallback() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     try {
                         val builder = param.thisObject
-                        val interceptors = XposedHelpers.callMethod(builder, "interceptors") as? MutableList<Any>
+                        val interceptors = XposedCompat.callMethod(builder, "interceptors") as? MutableList<Any>
                         if (interceptors != null && !interceptors.contains(interceptorProxy)) {
                             interceptors.add(0, interceptorProxy)
                         } else {
-                            XposedHelpers.callMethod(builder, "addInterceptor", interceptorProxy)
+                            XposedCompat.callMethod(builder, "addInterceptor", interceptorProxy)
                         }
                     } catch (e: Throwable) {
                         ConfigManager.logError("✘ 注入 OkHttp 拦截器异常", e)
@@ -810,7 +809,7 @@ object ViewCleanHooks {
             }
         }
         try {
-            return XposedHelpers.callMethod(chain, "proceed", request)
+            return XposedCompat.callMethod(chain, "proceed", request) ?: throw java.io.IOException("Proceed returned null")
         } catch (e: Throwable) {
             val cause = e.cause ?: e
             if (cause is java.io.IOException) {
@@ -823,28 +822,28 @@ object ViewCleanHooks {
 
 
     private fun cleanJsonResponse(classLoader: ClassLoader, response: Any, transform: (String) -> String): Any {
-        val body = XposedHelpers.callMethod(response, "body") ?: return response
+        val body = XposedCompat.callMethod(response, "body") ?: return response
         // 配置响应应很小；超限时保留原响应，避免无限缓存响应体。
         val maxBytes = 4L * 1024 * 1024
-        val snapshot = XposedHelpers.callMethod(response, "peekBody", maxBytes + 1)
+        val snapshot = XposedCompat.callMethod(response, "peekBody", maxBytes + 1)
         val bodyString = try {
-            val size = XposedHelpers.callMethod(snapshot, "contentLength") as? Long ?: return response
+            val size = XposedCompat.callMethod(snapshot, "contentLength") as? Long ?: return response
             if (size > maxBytes) return response
-            XposedHelpers.callMethod(snapshot, "string") as? String ?: return response
+            XposedCompat.callMethod(snapshot, "string") as? String ?: return response
         } finally {
-            XposedHelpers.callMethod(snapshot, "close")
+            XposedCompat.callMethod(snapshot, "close")
         }
         val cleanJson = transform(bodyString)
         if (cleanJson == bodyString) return response
-        val mediaType = XposedHelpers.callMethod(body, "contentType")
+        val mediaType = XposedCompat.callMethod(body, "contentType")
         val newBody = createResponseBody(classLoader, mediaType, cleanJson)
-        val newBuilder = XposedHelpers.callMethod(response, "newBuilder")
-        XposedHelpers.callMethod(newBuilder, "body", newBody)
-        XposedHelpers.callMethod(newBuilder, "removeHeader", "Content-Length")
-        val cleaned = XposedHelpers.callMethod(newBuilder, "build")
+        val newBuilder = XposedCompat.callMethod(response, "newBuilder")
+        XposedCompat.callMethod(newBuilder, "body", newBody)
+        XposedCompat.callMethod(newBuilder, "removeHeader", "Content-Length")
+        val cleaned = XposedCompat.callMethod(newBuilder, "build")
         // 只在替换响应构造成功后释放原始 body，失败路径保留原 body 可读。
-        try { XposedHelpers.callMethod(body, "close") } catch (_: Throwable) {}
-        return cleaned
+        try { XposedCompat.callMethod(body, "close") } catch (_: Throwable) {}
+        return cleaned ?: response
     }
 
     private fun cleanPriceResponse(classLoader: ClassLoader, response: Any): Any {
@@ -934,7 +933,7 @@ object ViewCleanHooks {
         if (cleaned !== response) {
             repeat(blockedPromoCount) { ConfigManager.recordOfficialPromoBlocked() }
         }
-        return cleaned
+        return cleaned ?: response
     }
 
     private fun cleanRecommendAdConfJson(
@@ -1003,39 +1002,40 @@ object ViewCleanHooks {
     }
 
     private fun createResponseBody(classLoader: ClassLoader, mediaType: Any?, content: String): Any {
-        val responseBodyClass = XposedHelpers.findClass("okhttp3.ResponseBody", classLoader)
-        val mediaTypeClass = XposedHelpers.findClass("okhttp3.MediaType", classLoader)
+        val responseBodyClass = XposedCompat.findClass("okhttp3.ResponseBody", classLoader)
+        val mediaTypeClass = XposedCompat.findClass("okhttp3.MediaType", classLoader)
         val actualMediaType = mediaType ?: try {
-            XposedHelpers.callStaticMethod(mediaTypeClass, "parse", "application/json; charset=utf-8")
+            XposedCompat.callStaticMethod(mediaTypeClass, "parse", "application/json; charset=utf-8")
         } catch (_: Throwable) {
-            val companion = XposedHelpers.getStaticObjectField(mediaTypeClass, "Companion")
-            XposedHelpers.callMethod(companion, "parse", "application/json; charset=utf-8")
+            val companion = XposedCompat.getStaticObjectField(mediaTypeClass, "Companion")
+            XposedCompat.callMethod(companion, "parse", "application/json; charset=utf-8")
         }
 
-        return try {
-            XposedHelpers.callStaticMethod(responseBodyClass, "create", actualMediaType, content)
+        val created = try {
+            XposedCompat.callStaticMethod(responseBodyClass, "create", actualMediaType, content)
         } catch (_: Throwable) {
             try {
-                val companion = XposedHelpers.getStaticObjectField(responseBodyClass, "Companion")
-                XposedHelpers.callMethod(companion, "create", actualMediaType, content)
+                val companion = XposedCompat.getStaticObjectField(responseBodyClass, "Companion")
+                XposedCompat.callMethod(companion, "create", actualMediaType, content)
             } catch (_: Throwable) {
-                XposedHelpers.callStaticMethod(responseBodyClass, "create", content, actualMediaType)
+                XposedCompat.callStaticMethod(responseBodyClass, "create", content, actualMediaType)
             }
         }
+        return created ?: throw IllegalStateException("Failed to create response body")
     }
 
     private fun createMockJsonResponse(classLoader: ClassLoader, request: Any, jsonStr: String): Any {
-        val responseBuilderClass = XposedHelpers.findClass("okhttp3.Response\$Builder", classLoader)
-        val protocolClass = XposedHelpers.findClass("okhttp3.Protocol", classLoader)
+        val responseBuilderClass = XposedCompat.findClass("okhttp3.Response\$Builder", classLoader)
+        val protocolClass = XposedCompat.findClass("okhttp3.Protocol", classLoader)
         val responseBody = createResponseBody(classLoader, null, jsonStr)
 
-        val http11 = XposedHelpers.getStaticObjectField(protocolClass, "HTTP_1_1")
+        val http11 = XposedCompat.getStaticObjectField(protocolClass, "HTTP_1_1")
         val builder = responseBuilderClass.getDeclaredConstructor().newInstance()
-        XposedHelpers.callMethod(builder, "request", request)
-        XposedHelpers.callMethod(builder, "protocol", http11)
-        XposedHelpers.callMethod(builder, "code", 200)
-        XposedHelpers.callMethod(builder, "message", "OK")
-        XposedHelpers.callMethod(builder, "body", responseBody)
-        return XposedHelpers.callMethod(builder, "build")
+        XposedCompat.callMethod(builder, "request", request)
+        XposedCompat.callMethod(builder, "protocol", http11)
+        XposedCompat.callMethod(builder, "code", 200)
+        XposedCompat.callMethod(builder, "message", "OK")
+        XposedCompat.callMethod(builder, "body", responseBody)
+        return XposedCompat.callMethod(builder, "build") ?: throw IllegalStateException("Build response failed")
     }
 }

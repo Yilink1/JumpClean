@@ -1,5 +1,8 @@
 package com.yilink.jumpclean.hooks
 
+import com.yilink.jumpclean.XposedCompat
+import com.yilink.jumpclean.XposedCompat.MethodHookParam
+
 import android.app.Activity
 import android.content.Context
 import android.os.SystemClock
@@ -8,10 +11,6 @@ import com.yilink.jumpclean.HookUtils
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
 import com.yilink.jumpclean.config.KeywordMatcher
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.lang.reflect.Field
 import java.lang.reflect.Modifier
 import java.util.ArrayList
@@ -60,15 +59,15 @@ object FeedHooks {
         }
     }
 
-    fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
+    fun hook(classLoader: ClassLoader) {
         // 1. 启动期尝试定位并 Hook BRV Adapter 基类（优先使用持久化缓存，零性能损耗）
-        hookBrvAdaptersAtStartup(lpparam)
+        hookBrvAdaptersAtStartup(classLoader)
 
         // 2. 启动期定位并 Hook BRVAH 列表适配器（BaseQuickAdapter，支持游戏详情页评测等列表）
-        hookBrvahAdaptersAtStartup(lpparam)
+        hookBrvahAdaptersAtStartup(classLoader)
 
         // 3. 常驻开启 RecyclerView.setAdapter 动态探针，捕获游戏详情页评测等动态加载的 Adapter
-        hookRecyclerViewSetAdapter(lpparam)
+        hookRecyclerViewSetAdapter(classLoader)
     }
 
     private fun getHostVersionCode(context: Context?): Int {
@@ -97,7 +96,7 @@ object FeedHooks {
             val cachedName = prefs.getString(PREF_CACHED_BRV_CLASS, null)
             val cachedVersion = prefs.getInt(PREF_CACHED_BRV_VERSION, -1)
             if (!cachedName.isNullOrBlank() && cachedVersion == currentVersion) {
-                val cls = XposedHelpers.findClassIfExists(cachedName, classLoader)
+                val cls = XposedCompat.findClassIfExists(cachedName, classLoader)
                 if (cls != null) {
                     return cls
                 }
@@ -108,7 +107,7 @@ object FeedHooks {
         val knownNames = listOf("com.drake.brv.BindingAdapter", "com.drake.brv.b", "zn0", "yn0", "xn0", "wn0")
         for (name in knownNames) {
             try {
-                val cls = XposedHelpers.findClassIfExists(name, classLoader) ?: continue
+                val cls = XposedCompat.findClassIfExists(name, classLoader) ?: continue
                 saveBrvClassToCache(name, currentVersion)
                 return cls
             } catch (_: Exception) {}
@@ -144,7 +143,7 @@ object FeedHooks {
             val dexElementsField = HookUtils.findFieldRecursively(pathList.javaClass, "dexElements") ?: return null
             val dexElements = dexElementsField.get(pathList) as? Array<*> ?: return null
 
-            val rvAdapterClass = XposedHelpers.findClassIfExists("androidx.recyclerview.widget.RecyclerView\$Adapter", classLoader)
+            val rvAdapterClass = XposedCompat.findClassIfExists("androidx.recyclerview.widget.RecyclerView\$Adapter", classLoader)
 
             for (element in dexElements) {
                 val elementObj = element ?: continue
@@ -186,12 +185,12 @@ object FeedHooks {
         }
     }
 
-    private fun hookBrvAdaptersAtStartup(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookBrvAdaptersAtStartup(classLoader: ClassLoader) {
         try {
-            val adapterClass = findBrvAdapterClass(lpparam.classLoader)
+            val adapterClass = findBrvAdapterClass(classLoader)
             if (adapterClass != null) {
                 brvBaseClass = adapterClass
-                ensureAdapterClassHooked(adapterClass, lpparam)
+                ensureAdapterClassHooked(adapterClass, classLoader)
             } else {
                 ConfigManager.log("[Hook] 未直接命中 BRV 基类，已开启 setAdapter 动态探针兜底")
             }
@@ -200,13 +199,13 @@ object FeedHooks {
         }
     }
 
-    private fun hookBrvahAdaptersAtStartup(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookBrvahAdaptersAtStartup(classLoader: ClassLoader) {
         try {
-            val brvahClass = XposedHelpers.findClassIfExists(
-                "com.chad.library.adapter.base.BaseQuickAdapter", lpparam.classLoader
+            val brvahClass = XposedCompat.findClassIfExists(
+                "com.chad.library.adapter.base.BaseQuickAdapter", classLoader
             )
             if (brvahClass != null) {
-                ensureAdapterClassHooked(brvahClass, lpparam)
+                ensureAdapterClassHooked(brvahClass, classLoader)
             }
         } catch (e: Exception) {
             ConfigManager.logError("启动期 BRVAH Hook 异常", e)
@@ -217,10 +216,10 @@ object FeedHooks {
      * Hook RecyclerView.setAdapter(adapter)
      * 无论宿主如何升级混淆，当列表绑定 Adapter 时，必定捕获真实的 Adapter 实例并安装 Hook
      */
-    private fun hookRecyclerViewSetAdapter(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookRecyclerViewSetAdapter(classLoader: ClassLoader) {
         try {
-            val rvClass = XposedHelpers.findClassIfExists("androidx.recyclerview.widget.RecyclerView", lpparam.classLoader) ?: return
-            XposedBridge.hookAllMethods(rvClass, "setAdapter", object : XC_MethodHook() {
+            val rvClass = XposedCompat.findClassIfExists("androidx.recyclerview.widget.RecyclerView", classLoader) ?: return
+            XposedCompat.hookAllMethods(rvClass, "setAdapter", object : XposedCompat.MethodHookCallback() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val adapter = param.args.getOrNull(0) ?: return
                     val cls = adapter.javaClass
@@ -232,14 +231,14 @@ object FeedHooks {
 
                     if (!hookedAdapterClasses.contains(cls.name)) {
                         ConfigManager.log("[Probe] 动态捕获列表适配器: ${cls.simpleName} (${cls.name})")
-                        ensureAdapterClassHooked(cls, lpparam)
+                        ensureAdapterClassHooked(cls, classLoader)
                     }
 
                     currentRecommendAdapterRef = java.lang.ref.WeakReference(adapter)
 
                     // 检查已挂载数据（防止在 setAdapter 之前就已注入旧数据）
-                    val isPromoEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
-                    val isKeywordEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_ENABLE_KEYWORD_BLOCK)
+                    val isPromoEnabled = ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
+                    val isKeywordEnabled = ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_ENABLE_KEYWORD_BLOCK)
                     if (isPromoEnabled || isKeywordEnabled) {
                         scanAndFilterAdapterModels(adapter, isPromoEnabled, isKeywordEnabled)
                     }
@@ -263,12 +262,12 @@ object FeedHooks {
     /**
      * 向上遍历类继承链，确保 Adapter 及其 BRV 父类的方法全部完成拦截
      */
-    private fun ensureAdapterClassHooked(adapterClass: Class<*>, lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun ensureAdapterClassHooked(adapterClass: Class<*>, classLoader: ClassLoader) {
         var cur: Class<*>? = adapterClass
         while (cur != null && cur != Any::class.java && cur.name != "androidx.recyclerview.widget.RecyclerView\$Adapter") {
             val className = cur.name
             if (hookedAdapterClasses.add(className)) {
-                hookSingleAdapterClass(cur, lpparam)
+                hookSingleAdapterClass(cur, classLoader)
                 checkAndPersistBrvClass(cur)
             }
             cur = cur.superclass
@@ -290,15 +289,16 @@ object FeedHooks {
         } catch (_: Throwable) {}
     }
 
-    private fun hookSingleAdapterClass(adapterClass: Class<*>, lpparam: XC_LoadPackage.LoadPackageParam) {
-        val filterDataHook = object : XC_MethodHook() {
+    private fun hookSingleAdapterClass(adapterClass: Class<*>, classLoader: ClassLoader) {
+        val filterDataHook = object : XposedCompat.MethodHookCallback() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 val args = param.args
-                val isPromoEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
-                val isKeywordEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_ENABLE_KEYWORD_BLOCK)
-                val isRestoreEnabled = ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_RESTORE_POST_YEAR)
+                val isPromoEnabled = ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST)
+                val isKeywordEnabled = ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_ENABLE_KEYWORD_BLOCK)
+                val isRestoreEnabled = ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_RESTORE_POST_YEAR)
                 if (!isPromoEnabled && !isKeywordEnabled && !isRestoreEnabled) return
-                val scope = adapterDataPass.enter(param.thisObject)
+                val thisObj = param.thisObject ?: return
+                val scope = adapterDataPass.enter(thisObj)
                 param.setObjectExtra(DATA_PASS_ENTERED, true)
 
                 for (i in args.indices) {
@@ -334,7 +334,7 @@ object FeedHooks {
             override fun afterHookedMethod(param: MethodHookParam) {
                 // 宿主方法正常返回或抛异常都会进入 after，最外层退出即释放本轮快照。
                 if (param.getObjectExtra(DATA_PASS_ENTERED) == true) {
-                    adapterDataPass.leave(param.thisObject)
+                    param.thisObject?.let { adapterDataPass.leave(it) }
                 }
             }
         }
@@ -345,14 +345,14 @@ object FeedHooks {
                 val hasCollectionParam = method.parameterTypes.any { Collection::class.java.isAssignableFrom(it) }
                 if (hasCollectionParam) {
                     try {
-                        XposedBridge.hookMethod(method, filterDataHook)
+                        XposedCompat.hookMethod(method, filterDataHook)
                         hookCount++
                     } catch (_: Throwable) {}
                 }
             }
         }
 
-        val onBindHook = object : XC_MethodHook() {
+        val onBindHook = object : XposedCompat.MethodHookCallback() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 try {
                     val holder = param.args.getOrNull(0) ?: return
@@ -366,7 +366,7 @@ object FeedHooks {
                     lastBindHolderHash = holderHash
                     lastBindTime = now
 
-                    val itemView = XposedHelpers.getObjectField(holder, "itemView") as? View ?: return
+                    val itemView = XposedCompat.getObjectField(holder, "itemView") as? View ?: return
                     val context = itemView.context ?: return
                     ConfigManager.initAppContext(context)
 
@@ -394,7 +394,7 @@ object FeedHooks {
 
                     // 3. 获取条目布局名称（走 O(1) 内存缓存，彻底杜绝高频 JNI getResourceEntryName 调用）
                     val itemViewType = try {
-                        XposedHelpers.callMethod(holder, "getItemViewType") as? Int
+                        XposedCompat.callMethod(holder, "getItemViewType") as? Int
                     } catch (_: Exception) {
                         null
                     }
@@ -472,7 +472,7 @@ object FeedHooks {
             }
         }
 
-        XposedBridge.hookAllMethods(adapterClass, "onBindViewHolder", onBindHook)
+        XposedCompat.hookAllMethods(adapterClass, "onBindViewHolder", onBindHook)
         val desc = if (hookCount > 0) {
             "列表适配器已挂载: ${adapterClass.simpleName} ($hookCount 个数据入口)"
         } else {
@@ -500,7 +500,7 @@ object FeedHooks {
                 val value = cachedField.get(adapter)
                 if (value is MutableList<*>) {
                     if (filterPromoList(value, isPromoEnabled, isKeywordEnabled)) {
-                        try { XposedHelpers.callMethod(adapter, "notifyDataSetChanged") } catch (_: Throwable) {}
+                        try { XposedCompat.callMethod(adapter, "notifyDataSetChanged") } catch (_: Throwable) {}
                     }
                     return
                 }
@@ -516,7 +516,7 @@ object FeedHooks {
                         if (value is MutableList<*>) {
                             cachedModelsField = field
                             if (filterPromoList(value, isPromoEnabled, isKeywordEnabled)) {
-                                try { XposedHelpers.callMethod(adapter, "notifyDataSetChanged") } catch (_: Throwable) {}
+                                try { XposedCompat.callMethod(adapter, "notifyDataSetChanged") } catch (_: Throwable) {}
                             }
                             return
                         }

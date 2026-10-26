@@ -1,5 +1,8 @@
 package com.yilink.jumpclean.hooks
 
+import com.yilink.jumpclean.XposedCompat
+import com.yilink.jumpclean.XposedCompat.MethodHookParam
+
 import android.app.Activity
 import android.content.Context
 import android.graphics.Color
@@ -13,10 +16,6 @@ import android.widget.TextView
 import com.yilink.jumpclean.HookUtils
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.util.Collections
 import java.util.LinkedHashMap
 import java.util.WeakHashMap
@@ -31,25 +30,25 @@ object FeatureHooks {
     @Volatile
     private var lastYearRestoreLogTime = 0L
 
-    fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
-        hookUserContentItemModel(lpparam)
-        hookTopicDiscussModel(lpparam)
-        hookArticleCopy(lpparam)
-        hookNativeTextCopy(lpparam)
-        hookPostDateCacheRead(lpparam)
+    fun hook(classLoader: ClassLoader) {
+        hookUserContentItemModel(classLoader)
+        hookTopicDiscussModel(classLoader)
+        hookArticleCopy(classLoader)
+        hookNativeTextCopy(classLoader)
+        hookPostDateCacheRead(classLoader)
     }
 
     // ==================== 年份恢复逻辑 ====================
 
-    private fun hookUserContentItemModel(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookUserContentItemModel(classLoader: ClassLoader) {
         try {
-            val userContentItemClass = XposedHelpers.findClassIfExists(
-                "com.vgjump.jump.bean.content.UserContentItem", lpparam.classLoader
+            val userContentItemClass = XposedCompat.findClassIfExists(
+                "com.vgjump.jump.bean.content.UserContentItem", classLoader
             ) ?: return
 
-            XposedBridge.hookAllMethods(userContentItemClass, "getPostTimeStr", object : XC_MethodHook() {
+            XposedCompat.hookAllMethods(userContentItemClass, "getPostTimeStr", object : XposedCompat.MethodHookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
-                    if (!ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_RESTORE_POST_YEAR)) return
+                    if (!ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_RESTORE_POST_YEAR)) return
                     try {
                         val obj = param.thisObject ?: return
                         val postTimeStr = param.result as? String ?: return
@@ -73,15 +72,15 @@ object FeatureHooks {
         }
     }
 
-    private fun hookTopicDiscussModel(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookTopicDiscussModel(classLoader: ClassLoader) {
         try {
-            val topicDiscussClass = XposedHelpers.findClassIfExists(
-                "com.vgjump.jump.bean.content.topic.TopicDiscuss", lpparam.classLoader
+            val topicDiscussClass = XposedCompat.findClassIfExists(
+                "com.vgjump.jump.bean.content.topic.TopicDiscuss", classLoader
             ) ?: return
 
-            XposedBridge.hookAllMethods(topicDiscussClass, "getPostTimeStr", object : XC_MethodHook() {
+            XposedCompat.hookAllMethods(topicDiscussClass, "getPostTimeStr", object : XposedCompat.MethodHookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
-                    if (!ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_RESTORE_POST_YEAR)) return
+                    if (!ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_RESTORE_POST_YEAR)) return
                     try {
                         val obj = param.thisObject ?: return
                         val postTimeStr = param.result as? String ?: return
@@ -166,10 +165,10 @@ object FeatureHooks {
 
             if (targetModel == null) {
                 try {
-                    val adapter = XposedHelpers.callMethod(holder, "getBindingAdapter")
-                    val pos = XposedHelpers.callMethod(holder, "getLayoutPosition") as? Int ?: -1
-                    val models = (XposedHelpers.getObjectField(adapter, "models") as? List<*>)
-                        ?: (XposedHelpers.getObjectField(adapter, "f") as? List<*>)
+                    val adapter = XposedCompat.callMethod(holder, "getBindingAdapter")
+                    val pos = XposedCompat.callMethod(holder, "getLayoutPosition") as? Int ?: -1
+                    val models = (XposedCompat.getObjectField(adapter, "models") as? List<*>)
+                        ?: (XposedCompat.getObjectField(adapter, "f") as? List<*>)
 
                     if (models != null && pos in models.indices) {
                         targetModel = models[pos]
@@ -209,14 +208,14 @@ object FeatureHooks {
         }
     }
 
-    private fun hookPostDateCacheRead(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookPostDateCacheRead(classLoader: ClassLoader) {
         try {
-            XposedHelpers.findAndHookMethod(
+            XposedCompat.findAndHookMethod(
                 TextView::class.java, "setText",
                 CharSequence::class.java, TextView.BufferType::class.java,
-                object : XC_MethodHook() {
+                object : XposedCompat.MethodHookCallback() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
-                        if (!ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_RESTORE_POST_YEAR)) return
+                        if (!ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_RESTORE_POST_YEAR)) return
                         try {
                             val tv = param.thisObject as? TextView ?: return
                             val context = tv.context ?: return
@@ -297,7 +296,7 @@ object FeatureHooks {
                 u.startsWith("file:///storage/emulated/0/android/data/com.vgjump.jump/")
     }
 
-    private fun hookArticleCopy(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookArticleCopy(classLoader: ClassLoader) {
         val unlockJs = """
             (function() {
                 try {
@@ -333,12 +332,13 @@ object FeatureHooks {
             })();
         """.trimIndent()
 
-        fun inject(webView: Any) {
+        fun inject(webView: Any?) {
+            if (webView == null) return
             listOf(300L, 1200L).forEach { delay ->
                 try {
-                    XposedHelpers.callMethod(webView, "postDelayed", Runnable {
+                    XposedCompat.callMethod(webView, "postDelayed", Runnable {
                         try {
-                            XposedHelpers.callMethod(webView, "evaluateJavascript", unlockJs, null)
+                            XposedCompat.callMethod(webView, "evaluateJavascript", unlockJs, null)
                         } catch (e: Exception) {
                             ConfigManager.logError("WebView JS 注入失败", e)
                         }
@@ -350,14 +350,14 @@ object FeatureHooks {
         }
 
         try {
-            val dWebViewClass = XposedHelpers.findClassIfExists("com.vgjump.jump.basic.jsbridge.DWebView", lpparam.classLoader)
+            val dWebViewClass = XposedCompat.findClassIfExists("com.vgjump.jump.basic.jsbridge.DWebView", classLoader)
             if (dWebViewClass != null) {
-                XposedBridge.hookAllMethods(dWebViewClass, "d", object : XC_MethodHook() {
+                XposedCompat.hookAllMethods(dWebViewClass, "d", object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         try {
                             val firstArg = param.args.getOrNull(0)?.toString() ?: ""
                             if (firstArg.contains("registerArticleDataRes") &&
-                                ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_ENABLE_COPY)
+                                ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_ENABLE_COPY)
                             ) {
                                 inject(param.thisObject)
                             }
@@ -366,11 +366,11 @@ object FeatureHooks {
                         }
                     }
                 })
-                XposedBridge.hookAllMethods(dWebViewClass, "loadUrl", object : XC_MethodHook() {
+                XposedCompat.hookAllMethods(dWebViewClass, "loadUrl", object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         try {
                             val url = param.args.getOrNull(0) as? String ?: return
-                            if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_ENABLE_COPY) && shouldInjectCopyJs(url)) {
+                            if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_ENABLE_COPY) && shouldInjectCopyJs(url)) {
                                 inject(param.thisObject)
                             }
                         } catch (e: Exception) {
@@ -380,19 +380,19 @@ object FeatureHooks {
                 })
             }
 
-            val webViewClass = XposedHelpers.findClassIfExists("android.webkit.WebView", lpparam.classLoader)
+            val webViewClass = XposedCompat.findClassIfExists("android.webkit.WebView", classLoader)
             if (webViewClass != null) {
-                XposedBridge.hookAllMethods(webViewClass, "loadUrl", object : XC_MethodHook() {
+                XposedCompat.hookAllMethods(webViewClass, "loadUrl", object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val url = param.args.getOrNull(0) as? String ?: return
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_ENABLE_COPY) && shouldInjectCopyJs(url)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_ENABLE_COPY) && shouldInjectCopyJs(url)) {
                             inject(param.thisObject)
                         }
                     }
                 })
-                XposedBridge.hookAllMethods(webViewClass, "setLongClickable", object : XC_MethodHook() {
+                XposedCompat.hookAllMethods(webViewClass, "setLongClickable", object : XposedCompat.MethodHookCallback() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_ENABLE_COPY)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_ENABLE_COPY)) {
                             param.args[0] = true
                         }
                     }
@@ -502,22 +502,22 @@ object FeatureHooks {
         }
     }
 
-    private fun hookNativeTextCopy(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookNativeTextCopy(classLoader: ClassLoader) {
         try {
             // 剥离全局 View.onAttachedToWindow Hook，彻底消除首页与全局滑动的微卡掉帧
-            XposedHelpers.findAndHookMethod(
+            XposedCompat.findAndHookMethod(
                 TextView::class.java, "setText",
                 CharSequence::class.java, TextView.BufferType::class.java,
-                object : XC_MethodHook() {
+                object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         // 1. 若功能未开启，纳秒级极速熔断，零操作
-                        if (!ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_ENABLE_COPY)) return
+                        if (!ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_ENABLE_COPY)) return
 
                         // 2. 首页或非详情页纳秒级极速返回
                         val act = SplashHooks.currentActivityName
                         if (!act.contains("Detail")) return
 
-                        enableTextCopy(param.thisObject as? TextView, lpparam.classLoader)
+                        enableTextCopy(param.thisObject as? TextView, classLoader)
                     }
                 }
             )

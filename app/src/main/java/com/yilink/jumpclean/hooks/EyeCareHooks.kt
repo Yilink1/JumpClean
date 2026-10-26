@@ -1,5 +1,8 @@
 package com.yilink.jumpclean.hooks
 
+import com.yilink.jumpclean.XposedCompat
+import com.yilink.jumpclean.XposedCompat.MethodHookParam
+
 import android.app.Activity
 import android.content.res.Configuration
 import android.graphics.Canvas
@@ -8,10 +11,6 @@ import android.widget.TextView
 import android.content.res.ColorStateList
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
-
 /**
  * 夜间护眼：把宿主夜间模式的纯黑 #000000 底色换成深灰，可选再把纯白文字压成柔白。
  *
@@ -70,10 +69,10 @@ object EyeCareHooks {
         return if (!csl.isStateful && csl.defaultColor == -1) ColorStateList.valueOf(SOFT_WHITE) else null
     }
 
-    fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
+    fun hook(classLoader: ClassLoader) {
         try {
             // 每次 Activity 恢复时刷新设置快照与夜间状态（AppCompat 切夜间会重建 Activity，必经 onResume）
-            XposedHelpers.findAndHookMethod(Activity::class.java, "onResume", object : XC_MethodHook() {
+            XposedCompat.findAndHookMethod(Activity::class.java, "onResume", object : XposedCompat.MethodHookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val a = param.thisObject as? Activity ?: return
                     try {
@@ -96,7 +95,7 @@ object EyeCareHooks {
                 }
             })
 
-            XposedHelpers.findAndHookMethod(ColorDrawable::class.java, "draw", Canvas::class.java, object : XC_MethodHook() {
+            XposedCompat.findAndHookMethod(ColorDrawable::class.java, "draw", Canvas::class.java, object : XposedCompat.MethodHookCallback() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     if (!softBlack || !night) return
                     val d = param.thisObject as? ColorDrawable ?: return
@@ -108,10 +107,10 @@ object EyeCareHooks {
                 }
             })
 
-            XposedHelpers.findAndHookMethod(
+            XposedCompat.findAndHookMethod(
                 ColorStateList::class.java, "getColorForState",
-                IntArray::class.java, Int::class.javaPrimitiveType,
-                object : XC_MethodHook() {
+                IntArray::class.java, Int::class.javaPrimitiveType!!,
+                object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         if (!softWhite || !night) return
                         if (diag) statColorForState++
@@ -123,16 +122,16 @@ object EyeCareHooks {
 
             // 补两条「公开 API 入口」：setTextColor(int) / setTextColor(ColorStateList)。
             // 实测日志里 TextView 构造完成后的那条路径命中 0 次，已去掉（它每创建一个 TextView 都要跑一遍，纯开销）
-            XposedHelpers.findAndHookMethod(TextView::class.java, "setTextColor", Int::class.javaPrimitiveType,
-                object : XC_MethodHook() {
+            XposedCompat.findAndHookMethod(TextView::class.java, "setTextColor", Int::class.javaPrimitiveType!!,
+                object : XposedCompat.MethodHookCallback() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         if (!softWhite || !night) return
                         if (diag) statSetText++
                         if (param.args[0] == -1) { param.args[0] = SOFT_WHITE; if (diag) statSetSoftened++ }
                     }
                 })
-            XposedHelpers.findAndHookMethod(TextView::class.java, "setTextColor", ColorStateList::class.java,
-                object : XC_MethodHook() {
+            XposedCompat.findAndHookMethod(TextView::class.java, "setTextColor", ColorStateList::class.java,
+                object : XposedCompat.MethodHookCallback() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         if (!softWhite || !night) return
                         if (diag) statSetText++

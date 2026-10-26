@@ -1,5 +1,8 @@
 package com.yilink.jumpclean.hooks
 
+import com.yilink.jumpclean.XposedCompat
+import com.yilink.jumpclean.XposedCompat.MethodHookParam
+
 import android.app.Activity
 import android.graphics.Color
 import android.util.TypedValue
@@ -13,10 +16,6 @@ import com.yilink.jumpclean.HookUtils
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
 import com.yilink.jumpclean.ui.SettingsDialog
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.util.Collections
 import java.util.WeakHashMap
 
@@ -31,9 +30,9 @@ object SettingsEntryHooks {
         "com.vgjump.jump.ui.my.setting.SettingActivity"
     )
 
-    fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
-        hookSettingsEntry(lpparam)
-        hookSettingActivityEntry(lpparam)
+    fun hook(classLoader: ClassLoader) {
+        hookSettingsEntry(classLoader)
+        hookSettingActivityEntry(classLoader)
     }
 
     /**
@@ -43,13 +42,13 @@ object SettingsEntryHooks {
      * 1. 首选：通过 RecyclerView Adapter (BRVAH BaseQuickAdapter) 动态注入原生 SettingItem 数据
      * 2. 兜底：若数据注入未生效，直接在 RecyclerView 父容器顶部插入 1:1 官方样式原生条目
      */
-    private fun hookSettingActivityEntry(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookSettingActivityEntry(classLoader: ClassLoader) {
         // 1. Hook android.app.Activity.onResume（系统基类，绝对不会触发 NoSuchMethodError）
         try {
-            XposedHelpers.findAndHookMethod(
+            XposedCompat.findAndHookMethod(
                 Activity::class.java,
                 "onResume",
-                object : XC_MethodHook() {
+                object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as? Activity ?: return
                         if (isTargetSettingActivity(activity)) {
@@ -66,11 +65,11 @@ object SettingsEntryHooks {
 
         // 2. Hook android.app.Activity.onWindowFocusChanged（界面完全渲染就绪的最终保障）
         try {
-            XposedHelpers.findAndHookMethod(
+            XposedCompat.findAndHookMethod(
                 Activity::class.java,
                 "onWindowFocusChanged",
                 Boolean::class.javaPrimitiveType,
-                object : XC_MethodHook() {
+                object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val hasFocus = param.args[0] as? Boolean ?: false
                         if (!hasFocus) return
@@ -88,9 +87,9 @@ object SettingsEntryHooks {
 
         // 3. Hook RecyclerView.setAdapter（当 Adapter 绑定到 View 时即时挂载）
         try {
-            val rvClass = XposedHelpers.findClassIfExists("androidx.recyclerview.widget.RecyclerView", lpparam.classLoader)
+            val rvClass = XposedCompat.findClassIfExists("androidx.recyclerview.widget.RecyclerView", classLoader)
             if (rvClass != null) {
-                XposedBridge.hookAllMethods(rvClass, "setAdapter", object : XC_MethodHook() {
+                XposedCompat.hookAllMethods(rvClass, "setAdapter", object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val rv = param.thisObject as? View ?: return
                         val activity = rv.context as? Activity ?: return
@@ -112,8 +111,8 @@ object SettingsEntryHooks {
         // 4. 对 SettingActivity 的 initData 进行安全拦截尝试
         for (className in TARGET_ACTIVITY_NAMES) {
             try {
-                val activityClass = XposedHelpers.findClassIfExists(className, lpparam.classLoader) ?: continue
-                XposedBridge.hookAllMethods(activityClass, "initData", object : XC_MethodHook() {
+                val activityClass = XposedCompat.findClassIfExists(className, classLoader) ?: continue
+                XposedCompat.hookAllMethods(activityClass, "initData", object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as? Activity ?: return
                         ConfigManager.initAppContext(activity)
@@ -203,7 +202,7 @@ object SettingsEntryHooks {
 
     private fun hasSettingItemInData(activity: Activity): Boolean {
         val rv = getSettingRecyclerView(activity) ?: return false
-        val adapter = try { XposedHelpers.callMethod(rv, "getAdapter") } catch (_: Throwable) { null } ?: return false
+        val adapter = try { XposedCompat.callMethod(rv, "getAdapter") } catch (_: Throwable) { null } ?: return false
         val dataList = getAdapterDataList(adapter) ?: return false
         return dataList.any { item ->
             HookUtils.safeCallStringGetter(item, "getTitle") == JumpConstants.SETTING_ITEM_TITLE
@@ -213,14 +212,14 @@ object SettingsEntryHooks {
     @Suppress("UNCHECKED_CAST")
     private fun getAdapterDataList(adapter: Any): MutableList<Any>? {
         return try {
-            XposedHelpers.callMethod(adapter, "getData") as? MutableList<Any>
+            XposedCompat.callMethod(adapter, "getData") as? MutableList<Any>
         } catch (_: Throwable) { null }
-            ?: (try { XposedHelpers.getObjectField(adapter, "mData") as? MutableList<Any> } catch (_: Throwable) { null })
-            ?: (try { XposedHelpers.getObjectField(adapter, "f") as? MutableList<Any> } catch (_: Throwable) { null })
+            ?: (try { XposedCompat.getObjectField(adapter, "mData") as? MutableList<Any> } catch (_: Throwable) { null })
+            ?: (try { XposedCompat.getObjectField(adapter, "f") as? MutableList<Any> } catch (_: Throwable) { null })
     }
 
     private fun createSettingItem(classLoader: ClassLoader): Any? {
-        val cls = XposedHelpers.findClassIfExists("com.vgjump.jump.bean.my.SettingItem", classLoader) ?: return null
+        val cls = XposedCompat.findClassIfExists("com.vgjump.jump.bean.my.SettingItem", classLoader) ?: return null
 
         // 1. 优先使用已在 Jump 3.30.27 与 3.30.29 全面对齐验证的标准 6 参数主构造器
         // (drawRes: Integer?, title: String, desc: String, moreContent: String, extraUri: String, extraStr: String)
@@ -267,7 +266,7 @@ object SettingsEntryHooks {
 
     private fun injectSettingItemIntoAdapter(activity: Activity): Boolean {
         val rv = getSettingRecyclerView(activity) ?: return false
-        val adapter = try { XposedHelpers.callMethod(rv, "getAdapter") } catch (_: Throwable) { null } ?: return false
+        val adapter = try { XposedCompat.callMethod(rv, "getAdapter") } catch (_: Throwable) { null } ?: return false
         val dataList = getAdapterDataList(adapter) ?: return false
 
         hookAdapterBindForSettingsEntry(adapter.javaClass)
@@ -281,7 +280,7 @@ object SettingsEntryHooks {
 
         var added = false
         try {
-            XposedHelpers.callMethod(adapter, "addData", 0, customItem)
+            XposedCompat.callMethod(adapter, "addData", 0, customItem)
             added = true
         } catch (_: Throwable) {}
 
@@ -289,9 +288,9 @@ object SettingsEntryHooks {
             try {
                 dataList.add(0, customItem)
                 try {
-                    XposedHelpers.callMethod(adapter, "notifyItemInserted", 0)
+                    XposedCompat.callMethod(adapter, "notifyItemInserted", 0)
                 } catch (_: Throwable) {
-                    XposedHelpers.callMethod(adapter, "notifyDataSetChanged")
+                    XposedCompat.callMethod(adapter, "notifyDataSetChanged")
                 }
                 added = true
             } catch (e: Throwable) {
@@ -321,11 +320,11 @@ object SettingsEntryHooks {
                 if (java.lang.reflect.Modifier.isAbstract(method.modifiers)) continue
                 if (method.name == "onBindViewHolder" && method.parameterTypes.size >= 2) {
                     try {
-                        XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                        XposedCompat.hookMethod(method, object : XposedCompat.MethodHookCallback() {
                             override fun afterHookedMethod(param: MethodHookParam) {
                                 try {
                                     val holder = param.args.getOrNull(0) ?: return
-                                    val itemView = (XposedHelpers.getObjectField(holder, "itemView") as? View) ?: return
+                                    val itemView = (XposedCompat.getObjectField(holder, "itemView") as? View) ?: return
                                     val position = param.args.getOrNull(1) as? Int ?: return
                                     val adapter = param.thisObject ?: return
                                     val dataList = getAdapterDataList(adapter) ?: return
@@ -359,7 +358,7 @@ object SettingsEntryHooks {
                 if (java.lang.reflect.Modifier.isAbstract(method.modifiers)) continue
                 if (method.name == "setOnItemClickListener") {
                     try {
-                        XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                        XposedCompat.hookMethod(method, object : XposedCompat.MethodHookCallback() {
                             override fun beforeHookedMethod(param: MethodHookParam) {
                                 val listener = param.args.getOrNull(0) ?: return
                                 hookItemClickListener(listener.javaClass)
@@ -387,7 +386,7 @@ object SettingsEntryHooks {
                 val params = method.parameterTypes
                 if (params.size == 3 && (params[2] == Int::class.javaPrimitiveType || params[2] == java.lang.Integer::class.java)) {
                     try {
-                        XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                        XposedCompat.hookMethod(method, object : XposedCompat.MethodHookCallback() {
                             override fun beforeHookedMethod(param: MethodHookParam) {
                                 try {
                                     val adapter = param.args.getOrNull(0) ?: return
@@ -528,11 +527,11 @@ object SettingsEntryHooks {
     /**
      * 快捷入口：长按首页底栏「我的」Tab 直接弹出设置
      */
-    private fun hookSettingsEntry(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val mainActivityClass = XposedHelpers.findClassIfExists("com.vgjump.jump.ui.main.MainActivity", lpparam.classLoader) ?: return
+    private fun hookSettingsEntry(classLoader: ClassLoader) {
+        val mainActivityClass = XposedCompat.findClassIfExists("com.vgjump.jump.ui.main.MainActivity", classLoader) ?: return
         try {
-            XposedHelpers.findAndHookMethod(mainActivityClass, "onCreate",
-                android.os.Bundle::class.java, object : XC_MethodHook() {
+            XposedCompat.findAndHookMethod(mainActivityClass, "onCreate",
+                android.os.Bundle::class.java, object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         try {
                             val activity = param.thisObject as Activity

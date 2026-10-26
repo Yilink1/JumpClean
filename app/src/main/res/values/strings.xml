@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">JumpClean</string>
+    <string name="xposed_description">Jump 社区净化与体验增强模块</string>
 </resources>

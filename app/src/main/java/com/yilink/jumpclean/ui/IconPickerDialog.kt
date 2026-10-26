@@ -24,7 +24,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
-import de.robv.android.xposed.XposedHelpers
+import com.yilink.jumpclean.XposedCompat
 
 object IconPickerDialog {
 
@@ -193,10 +193,12 @@ object IconPickerDialog {
             }
 
             try {
-                val mmkvClass = XposedHelpers.findClassIfExists("com.tencent.mmkv.MMKV", context.classLoader)
+                val mmkvClass = XposedCompat.findClassIfExists("com.tencent.mmkv.MMKV", context.classLoader)
                 if (mmkvClass != null) {
-                    val defaultMMKV = XposedHelpers.callStaticMethod(mmkvClass, "defaultMMKV")
-                    XposedHelpers.callMethod(defaultMMKV, "encode", "launch_icon", shortKey)
+                    val defaultMMKV = XposedCompat.callStaticMethod(mmkvClass, "defaultMMKV")
+                    if (defaultMMKV != null) {
+                        XposedCompat.callMethod(defaultMMKV, "encode", "launch_icon", shortKey)
+                    }
                 }
             } catch (_: Exception) {}
 

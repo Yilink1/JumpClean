@@ -1,5 +1,8 @@
 package com.yilink.jumpclean.hooks
 
+import com.yilink.jumpclean.XposedCompat
+import com.yilink.jumpclean.XposedCompat.MethodHookParam
+
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -17,10 +20,6 @@ import com.example.liquidglass.LiquidGlassTabBar
 import com.yilink.jumpclean.HookUtils
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.lang.ref.WeakReference
 
 /**
@@ -46,24 +45,24 @@ object LiquidGlassHooks {
     /** 当前存活的 MainActivity，供设置页（不同 Activity）触发实时刷新 */
     private var mainActivityRef: WeakReference<Activity>? = null
 
-    fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val mainActivityClass = XposedHelpers.findClassIfExists(
+    fun hook(classLoader: ClassLoader) {
+        val mainActivityClass = XposedCompat.findClassIfExists(
             "com.vgjump.jump.ui.main.MainActivity",
-            lpparam.classLoader
+            classLoader
         ) ?: return
 
         // ── WebView 一创建就开硬件层（库文档：玻璃背景里的 WebView 必须有硬件层，否则静止也每帧重绘→闪烁/白条）。
         //    只处理 MainActivity 里的 WebView，其它页面（文章页等）不动。
         //    同时登记弱引用，供运行中打开玻璃时补开硬件层。文字颜色直接跟随主题，无需软件采样。
         try {
-            XposedBridge.hookAllConstructors(android.webkit.WebView::class.java, object : XC_MethodHook() {
+            XposedCompat.hookAllConstructors(android.webkit.WebView::class.java, object : XposedCompat.MethodHookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     try {
                         val v = param.thisObject as? View ?: return
                         val a = unwrapActivity(v.context) ?: return
                         if (!a.javaClass.name.endsWith(".MainActivity")) return
                         synchronized(webViews) { webViews.add(WeakReference(v)) }
-                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV)) {
+                        if (ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV)) {
                             enableWebLayer(v)
                         }
                     } catch (_: Throwable) {}
@@ -75,11 +74,11 @@ object LiquidGlassHooks {
 
         try {
             // ── RadioGroup.check 双向同步：切页 → 水滴联动 ──
-            XposedHelpers.findAndHookMethod(
+            XposedCompat.findAndHookMethod(
                 RadioGroup::class.java,
                 "check",
                 Int::class.javaPrimitiveType,
-                object : XC_MethodHook() {
+                object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val group = param.thisObject as? RadioGroup ?: return
                         val checkedId = param.args[0] as Int
@@ -104,32 +103,32 @@ object LiquidGlassHooks {
             )
 
             // ── onCreate → 初始挂载 ──
-            XposedHelpers.findAndHookMethod(
+            XposedCompat.findAndHookMethod(
                 mainActivityClass,
                 "onCreate",
                 android.os.Bundle::class.java,
-                object : XC_MethodHook() {
+                object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as? Activity ?: return
                         mainActivityRef = WeakReference(activity)
                         activity.window?.decorView?.post {
-                            runSafe("onCreate") { applyLiquidGlass(activity, lpparam.classLoader) }
+                            runSafe("onCreate") { applyLiquidGlass(activity, classLoader) }
                         }
                     }
                 }
             )
 
             // ── onResume → 热更新 + 重绘 ──
-            XposedHelpers.findAndHookMethod(
+            XposedCompat.findAndHookMethod(
                 mainActivityClass,
                 "onResume",
-                object : XC_MethodHook() {
+                object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as? Activity ?: return
                         mainActivityRef = WeakReference(activity)
                         activity.window?.decorView?.post {
                             runSafe("onResume") {
-                                applyLiquidGlass(activity, lpparam.classLoader)
+                                applyLiquidGlass(activity, classLoader)
                                 findGlassPill(activity)?.invalidate()
                             }
                         }
@@ -137,16 +136,16 @@ object LiquidGlassHooks {
                 }
             )
 
-            XposedHelpers.findAndHookMethod(
+            XposedCompat.findAndHookMethod(
                 Activity::class.java,
                 "onConfigurationChanged",
                 android.content.res.Configuration::class.java,
-                object : XC_MethodHook() {
+                object : XposedCompat.MethodHookCallback() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as? Activity ?: return
                         if (!mainActivityClass.isInstance(activity)) return
                         activity.window?.decorView?.post {
-                            runSafe("themeChanged") { applyLiquidGlass(activity, lpparam.classLoader) }
+                            runSafe("themeChanged") { applyLiquidGlass(activity, classLoader) }
                         }
                     }
                 }
@@ -691,8 +690,8 @@ object LiquidGlassHooks {
     /** 检查 RecyclerView 是否为纵向滚动（通过 LayoutManager.canScrollVertically） */
     private fun isVerticalRV(view: View): Boolean {
         return try {
-            val lm = XposedHelpers.callMethod(view, "getLayoutManager") ?: return true
-            XposedHelpers.callMethod(lm, "canScrollVertically") as? Boolean ?: true
+            val lm = XposedCompat.callMethod(view, "getLayoutManager") ?: return true
+            XposedCompat.callMethod(lm, "canScrollVertically") as? Boolean ?: true
         } catch (_: Throwable) { true } // 异常时默认当做纵向
     }
 
