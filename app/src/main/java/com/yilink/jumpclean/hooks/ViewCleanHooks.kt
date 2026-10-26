@@ -567,6 +567,7 @@ object ViewCleanHooks {
                     val chain = args[0]
                     val request = XposedHelpers.callMethod(chain, "request")
                     val urlStr = XposedHelpers.callMethod(request, "url")?.toString() ?: ""
+
                     val proceedMethod = chain.javaClass.methods.firstOrNull { it.name == "proceed" && it.parameterTypes.size == 1 }
 
                     // 1. 动态购买弹幕纯网络断电：/jmall/order/recently 直接返回空数据
@@ -727,6 +728,46 @@ object ViewCleanHooks {
                         }
                     }
 
+                    // 8. 发现页顶部轮播广告网络断电：/jump/findGame/advert (返回空 data 数组，彻底避免适配器产生条目)
+                    if (urlStr.contains("/jump/findGame/advert")) {
+                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_DISCOVER_BANNER)) {
+                            try {
+                                val resp = createMockJsonResponse(
+                                    lpparam.classLoader,
+                                    request,
+                                    """{"success":true,"code":0,"msg":"success","data":[]}"""
+                                )
+                                ConfigManager.log("✔ [网络阻断] 拦截发现页顶部轮播广告 (/jump/findGame/advert)")
+                                return@newProxyInstance resp
+                            } catch (e: Throwable) {
+                                ConfigManager.logError("✘ 伪造 /jump/findGame/advert 响应失败，回退原生请求", e)
+                            }
+                        }
+                    }
+
+                    // 9. 发现页推荐模块数据网络断电：findGame/list_new, findPageV2/* (大家都在买/近期热门/收藏精选/40元以下/即将发售)
+                    if (urlStr.contains("/jump/findGame/list_new") ||
+                        urlStr.contains("/jump/findPageV2/favorite") ||
+                        urlStr.contains("/jump/findPageV2/newHotGame") ||
+                        urlStr.contains("/jump/findPageV2/lt40") ||
+                        urlStr.contains("/jump/findPageV2/comingSoon")
+                    ) {
+                        if (ConfigManager.isFeatureEnabledSafe(lpparam.classLoader, JumpConstants.KEY_HIDE_DISCOVER_MODULES)) {
+                            try {
+                                val resp = createMockJsonResponse(
+                                    lpparam.classLoader,
+                                    request,
+                                    """{"success":true,"code":0,"msg":"success","data":[]}"""
+                                )
+                                val endpoint = urlStr.substringBefore("?").substringAfterLast("/")
+                                ConfigManager.log("✔ [网络阻断] 拦截发现页模块数据 ($endpoint)")
+                                return@newProxyInstance resp
+                            } catch (e: Throwable) {
+                                ConfigManager.logError("✘ 伪造发现页模块数据响应失败，回退原生请求", e)
+                            }
+                        }
+                    }
+
                     return@newProxyInstance proceedSafe(proceedMethod, chain, request)
                 }
                 if (method.name == "toString") return@newProxyInstance "JumpCleanNetworkInterceptor"
@@ -779,7 +820,8 @@ object ViewCleanHooks {
         }
     }
 
-    /** 读取独立快照：清洗或反射重建失败时，调用方仍能返回未消费的原响应。 */
+
+
     private fun cleanJsonResponse(classLoader: ClassLoader, response: Any, transform: (String) -> String): Any {
         val body = XposedHelpers.callMethod(response, "body") ?: return response
         // 配置响应应很小；超限时保留原响应，避免无限缓存响应体。

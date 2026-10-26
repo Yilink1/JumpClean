@@ -223,8 +223,44 @@ object HookUtils {
         if (t != null) XposedBridge.log(t)
     }
 
+    /** 在 [view] 自身或浅层子孙里找 zhpan BannerViewPager（发现页轮播）。 */
+    private fun findBannerPager(view: View, depth: Int = 0): View? {
+        if (view.javaClass.name.contains("bannerview", ignoreCase = true)) return view
+        if (depth >= 8 || view !is ViewGroup) return null
+        for (i in 0 until view.childCount) {
+            findBannerPager(view.getChildAt(i), depth + 1)?.let { return it }
+        }
+        return null
+    }
+
+    private fun callBannerLoop(pager: View, method: String): Boolean {
+        return try {
+            XposedHelpers.callMethod(pager, method)
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun viewIdName(view: View): String = try {
+        if (view.id != View.NO_ID) view.resources.getResourceEntryName(view.id) else "no-id"
+    } catch (_: Throwable) {
+        "?"
+    }
+
+    /**
+     * 发现页「大家都在买」等模块内部是 zhpan 轮播（崩溃栈里创建 ViewHolder 的是 com.zhpan.bannerview 适配器），
+     * 折叠时只设 GONE，不改宽高/边距/内边距：改成 0×0 后实机发生过 Java 堆打满 512MB 的 OOM。
+     */
+    private val SAFE_COLLAPSE_IDS = setOf("llDiscoverModules", "moduleEveryoneBuying")
+
     fun collapseView(view: View, safeMode: Boolean = false) {
-        if (!collapsedViewStates.containsKey(view)) {
+        // 含 zhpan 轮播的容器一律只设 GONE：改尺寸（0×0 或仅高度 0）都抓到过
+        // RecyclerView.fill 无限创建 ViewHolder 把主线程占满 5 秒被系统清理。
+        val bannerPager = findBannerPager(view)
+        val effectiveSafe = safeMode || bannerPager != null || viewIdName(view) in SAFE_COLLAPSE_IDS
+        val firstCollapse = !collapsedViewStates.containsKey(view)
+        if (firstCollapse) {
             val params = view.layoutParams
             val marginParams = params as? ViewGroup.MarginLayoutParams
             collapsedViewStates[view] = ViewOriginalState(
@@ -242,16 +278,44 @@ object HookUtils {
         }
 
         if (view.visibility != View.GONE) view.visibility = View.GONE
+        // 含轮播的容器只设 GONE（见上）；并尽量停掉自动轮播（宿主混淆后 stopLoop 可能失败，仅尽力而为）。
+        if (bannerPager != null) {
+            val paused = try {
+                XposedHelpers.callMethod(bannerPager, "onPause")
+                true
+            } catch (_: Throwable) {
+                false
+            }
+            val handlerCleared = try {
+                val handler = findFieldRecursively(bannerPager.javaClass, "h")?.get(bannerPager) as? Handler
+                if (handler != null) {
+                    handler.removeCallbacksAndMessages(null)
+                    true
+                } else {
+                    false
+                }
+            } catch (_: Throwable) {
+                false
+            }
+            if (firstCollapse) {
+                log("[collapse诊断] ${viewIdName(view)} 轮播生命周期停播: onPause=$paused, handlerCleared=$handlerCleared")
+            }
+        } else if (firstCollapse && view.id != View.NO_ID) {
+            log("[collapse诊断] ${viewIdName(view)}(${view.javaClass.simpleName}) 未找到轮播，" + if (effectiveSafe) "仅 GONE" else "按 0x0 折叠")
+        }
+        if (firstCollapse && effectiveSafe && bannerPager != null) {
+            log("[collapse诊断] ${viewIdName(view)} 安全折叠：仅 GONE，不改尺寸")
+        }
         view.isEnabled = false
         view.isClickable = false
         view.isLongClickable = false
         view.isFocusable = false
         view.isFocusableInTouchMode = false
-        if (!safeMode) {
+        if (!effectiveSafe) {
             val params = view.layoutParams
-            if (params != null && (params.height != 0 || params.width != 0)) {
+            if (params != null && (params.height != 0 || (bannerPager == null && params.width != 0))) {
                 params.height = 0
-                params.width = 0
+                if (bannerPager == null) params.width = 0
                 if (params is ViewGroup.MarginLayoutParams) {
                     params.topMargin = 0
                     params.bottomMargin = 0
@@ -284,6 +348,11 @@ object HookUtils {
             view.layoutParams = params
         }
         view.setPadding(state.paddingLeft, state.paddingTop, state.paddingRight, state.paddingBottom)
+        findBannerPager(view)?.let {
+            try {
+                XposedHelpers.callMethod(it, "onResume")
+            } catch (_: Throwable) {}
+        }
         view.requestLayout()
         (view.parent as? View)?.requestLayout()
         view.invalidate()

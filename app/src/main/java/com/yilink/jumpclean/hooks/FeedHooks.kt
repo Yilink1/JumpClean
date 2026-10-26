@@ -226,6 +226,9 @@ object FeedHooks {
                     val cls = adapter.javaClass
                     val clsName = cls.name.lowercase()
                     if (clsName.contains("ninegrid") || clsName.contains("photoview") || clsName.contains("indicator")) return
+                    // zhpan 轮播的适配器类名被混淆（如 po2），只能沿父类链判断；
+                    // 它不是 Feed 流适配器，不能挂钩，也不能覆盖 currentRecommendAdapterRef。
+                    if (isBannerAdapter(cls)) return
 
                     if (!hookedAdapterClasses.contains(cls.name)) {
                         ConfigManager.log("[Probe] 动态捕获列表适配器: ${cls.simpleName} (${cls.name})")
@@ -246,6 +249,15 @@ object FeedHooks {
         } catch (e: Exception) {
             ConfigManager.logError("✘ RecyclerView.setAdapter Hook 失败", e)
         }
+    }
+
+    private fun isBannerAdapter(adapterClass: Class<*>): Boolean {
+        var cur: Class<*>? = adapterClass
+        while (cur != null && cur != Any::class.java) {
+            if (cur.name.startsWith("com.zhpan.bannerview")) return true
+            cur = cur.superclass
+        }
+        return false
     }
 
     /**
