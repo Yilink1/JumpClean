@@ -1066,49 +1066,79 @@ object ViewCleanHooks {
     @Volatile private var cachedWishlistGames: List<*>? = null
     @Volatile private var cachedWishlistDiscount: Int? = null
 
+    // ── 反射元数据缓存池 (Method / Field 终生只查一次，消除每帧 getMethod/declaredFields 性能损耗) ──
+    private val methodCache = java.util.concurrent.ConcurrentHashMap<Class<*>, java.util.concurrent.ConcurrentHashMap<String, java.lang.reflect.Method?>>()
+    private val fieldsCache = java.util.concurrent.ConcurrentHashMap<Class<*>, Array<java.lang.reflect.Field>>()
+
+    private fun getCachedMethod(clazz: Class<*>, methodName: String): java.lang.reflect.Method? {
+        val classMethods = methodCache.getOrPut(clazz) { java.util.concurrent.ConcurrentHashMap() }
+        return classMethods.getOrPut(methodName) {
+            try {
+                clazz.getMethod(methodName).apply { isAccessible = true }
+            } catch (_: Throwable) {
+                null
+            }
+        }
+    }
+
+    private fun getCachedFields(clazz: Class<*>): Array<java.lang.reflect.Field> {
+        return fieldsCache.getOrPut(clazz) {
+            val list = mutableListOf<java.lang.reflect.Field>()
+            for (f in clazz.declaredFields) {
+                if (java.lang.reflect.Modifier.isStatic(f.modifiers)) continue
+                f.isAccessible = true
+                list.add(f)
+            }
+            list.toTypedArray()
+        }
+    }
+
     private fun isDummyOverviewModel(model: Any): Boolean {
         val clazz = model.javaClass
         val name = clazz.name
 
         // 1. 主页主游戏墙 (GameWallOverView: 39款 / 849.6h / 4023元)
         if (name.endsWith("GameWallOverView")) {
-            val gameCount = try { (clazz.getMethod("getGameCount").invoke(model) as? Number)?.toInt() } catch (_: Throwable) { null }
-            val playTime = try { clazz.getMethod("getTotalPlayTime").invoke(model) as? String } catch (_: Throwable) { null }
-            val ownList = try { clazz.getMethod("getOwnGameList").invoke(model) as? List<*> } catch (_: Throwable) { null }
-            // 只要游戏列表为空且(无时长或数量<=0)，即判定为刷新空壳
+            val mGameCount = getCachedMethod(clazz, "getGameCount")
+            val mPlayTime = getCachedMethod(clazz, "getTotalPlayTime")
+            val mOwnList = getCachedMethod(clazz, "getOwnGameList")
+
+            val gameCount = try { (mGameCount?.invoke(model) as? Number)?.toInt() } catch (_: Throwable) { null }
+            val playTime = try { mPlayTime?.invoke(model) as? String } catch (_: Throwable) { null }
+            val ownList = try { mOwnList?.invoke(model) as? List<*> } catch (_: Throwable) { null }
             return (ownList == null || ownList.isEmpty()) && (playTime.isNullOrEmpty() || gameCount == null || gameCount == 0)
         }
 
         // 2. 平台分流游戏墙 (MemberGameWallOverview)
         if (name.endsWith("MemberGameWallOverview")) {
-            val s1 = try { clazz.getMethod("getSwitchRecentSummary").invoke(model) } catch (_: Throwable) { null }
-            val s2 = try { clazz.getMethod("getSteamRecentSummary").invoke(model) } catch (_: Throwable) { null }
-            val s3 = try { clazz.getMethod("getPsRecentSummary").invoke(model) } catch (_: Throwable) { null }
-            val s4 = try { clazz.getMethod("getXboxRecentSummary").invoke(model) } catch (_: Throwable) { null }
+            val s1 = try { getCachedMethod(clazz, "getSwitchRecentSummary")?.invoke(model) } catch (_: Throwable) { null }
+            val s2 = try { getCachedMethod(clazz, "getSteamRecentSummary")?.invoke(model) } catch (_: Throwable) { null }
+            val s3 = try { getCachedMethod(clazz, "getPsRecentSummary")?.invoke(model) } catch (_: Throwable) { null }
+            val s4 = try { getCachedMethod(clazz, "getXboxRecentSummary")?.invoke(model) } catch (_: Throwable) { null }
             return s1 == null && s2 == null && s3 == null && s4 == null
         }
 
         // 3. 心愿单: 游戏列表 gameList 与 count 均为空，或 gameList 为 null 且 count 为 null/空串
         if (name.endsWith("FavoriteOverView")) {
-            val gameList = try { clazz.getMethod("getGameList").invoke(model) } catch (_: Throwable) { null }
-            val count = try { clazz.getMethod("getCount").invoke(model) } catch (_: Throwable) { null }
+            val gameList = try { getCachedMethod(clazz, "getGameList")?.invoke(model) } catch (_: Throwable) { null }
+            val count = try { getCachedMethod(clazz, "getCount")?.invoke(model) } catch (_: Throwable) { null }
             return gameList == null && (count == null || count == "")
         }
 
         // 4. 动态、创作、收藏、合集: 空壳时 list 列表对象为 null
-        val list = try { clazz.getMethod("getList").invoke(model) } catch (_: Throwable) { null }
+        val list = try { getCachedMethod(clazz, "getList")?.invoke(model) } catch (_: Throwable) { null }
         if (list == null) {
             val subCount = try {
-                clazz.getMethod("getDynamicCount").invoke(model)
+                getCachedMethod(clazz, "getDynamicCount")?.invoke(model)
             } catch (_: Throwable) {
                 try {
-                    clazz.getMethod("getArticleCount").invoke(model)
+                    getCachedMethod(clazz, "getArticleCount")?.invoke(model)
                 } catch (_: Throwable) {
                     try {
-                        clazz.getMethod("getCollectionCount").invoke(model)
+                        getCachedMethod(clazz, "getCollectionCount")?.invoke(model)
                     } catch (_: Throwable) {
                         try {
-                            clazz.getMethod("getGameListCount").invoke(model)
+                            getCachedMethod(clazz, "getGameListCount")?.invoke(model)
                         } catch (_: Throwable) {
                             null
                         }
@@ -1120,11 +1150,13 @@ object ViewCleanHooks {
 
         return false
     }
+
     private fun getModelCacheKey(model: Any): String {
         val clazz = model.javaClass
         val className = clazz.name
+        val mOrderType = getCachedMethod(clazz, "getOrderType")
         val orderType = try {
-            clazz.getMethod("getOrderType").invoke(model)?.toString()
+            mOrderType?.invoke(model)?.toString()
         } catch (_: Throwable) {
             null
         }
@@ -1135,10 +1167,9 @@ object ViewCleanHooks {
         if (isDummyOverviewModel(model)) return // 严防空壳覆盖有效快照
         val clazz = model.javaClass
         val cacheKey = getModelCacheKey(model)
-        val map = HashMap<String, Any?>()
-        for (field in clazz.declaredFields) {
-            if (java.lang.reflect.Modifier.isStatic(field.modifiers)) continue
-            field.isAccessible = true
+        val fields = getCachedFields(clazz)
+        val map = HashMap<String, Any?>(fields.size)
+        for (field in fields) {
             val v = field.get(model)
             if (v != null) {
                 // 仅缓存展示相关基本类型与集合，避免持有复杂引用
@@ -1159,9 +1190,8 @@ object ViewCleanHooks {
         val cacheKey = getModelCacheKey(model)
         val cachedMap = cachedOverviewFieldMaps[cacheKey] ?: cachedOverviewFieldMaps[clazz.name] ?: return false
         return try {
-            for (field in clazz.declaredFields) {
-                if (java.lang.reflect.Modifier.isStatic(field.modifiers)) continue
-                field.isAccessible = true
+            val fields = getCachedFields(clazz)
+            for (field in fields) {
                 val cachedVal = cachedMap[field.name]
                 if (cachedVal != null) {
                     field.set(model, cachedVal)

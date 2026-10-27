@@ -142,6 +142,9 @@ object GlassStyle {
         bar.overLight = false
         bar.blurAmount = if (p.finish == 1) 0.50f else 0.42f
         bar.saturation = if (night) 108f else 118f
+        bar.enableOptimizedCapture = true
+        bar.globalDownsampleFactor = 0.5f
+        bar.downsampleScale = 2
         bar.enableEdgeHighlight = true
         bar.edgeHighlightOpacity = edgeHighlightOpacity(p.edge, night)
         bar.cornerRadius = 999f
