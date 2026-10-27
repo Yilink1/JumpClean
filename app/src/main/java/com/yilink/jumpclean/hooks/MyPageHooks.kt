@@ -134,7 +134,7 @@ object MyPageHooks {
         if (map.isNotEmpty()) {
             cachedOverviewFieldMaps[cacheKey] = map
             cachedOverviewFieldMaps[clazz.name] = map
-            ConfigManager.log("[OverviewSmoothing] 成功快照真实模块数据: $cacheKey")
+            ConfigManager.logThrottled("OverviewSmoothing", "[OverviewSmoothing] 成功快照真实模块数据: $cacheKey")
         }
     }
 
@@ -150,7 +150,7 @@ object MyPageHooks {
                     field.set(model, cachedVal)
                 }
             }
-            ConfigManager.log("[OverviewSmoothing] 抑制主页模块瞬时闪烁，成功回填: $cacheKey")
+            ConfigManager.logThrottled("OverviewSmoothing", "[OverviewSmoothing] 抑制主页模块瞬时闪烁，成功回填: $cacheKey")
             true
         } catch (e: Throwable) {
             ConfigManager.logError("回填主页模块缓存失败: $cacheKey", e)
@@ -309,7 +309,7 @@ object MyPageHooks {
                                     cachedWishlistDiscount?.let { discount ->
                                         try { XposedCompat.callMethod(fav, "setDiscountNum", discount) } catch (_: Throwable) {}
                                     }
-                                    ConfigManager.log("[WishlistSmoothing] 抑制心愿单瞬时闪烁，回填缓存: total=$cachedTotal")
+                                    ConfigManager.logThrottled("WishlistSmoothing", "[WishlistSmoothing] 抑制心愿单瞬时闪烁，回填缓存: total=$cachedTotal")
                                 } catch (e: Throwable) {
                                     ConfigManager.logError("回填心愿单缓存失败", e)
                                 }

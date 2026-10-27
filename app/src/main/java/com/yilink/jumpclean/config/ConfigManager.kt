@@ -250,6 +250,44 @@ object ConfigManager {
         }
     }
 
+    // ── 高频命中类日志合并节流 ──
+    // 列表回调/数据回填类日志每次刷新都打，开调试时一进页面就一串。
+    // 按 tag 分组：窗口内第一条直接打，后续只计数；
+    // 窗口结束后若有补充则打一条“期间还有 N 次同类事件”。
+    private const val LOG_THROTTLE_WINDOW_MS = 5000L
+    private val logThrottleWindowStart = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val logThrottleSuppressed = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
+    private val logThrottleFlush = HashMap<String, Runnable>()
+
+    fun logThrottled(tag: String, msg: String) {
+        if (!isFeatureEnabledSafe(targetClassLoader, JumpConstants.KEY_ENABLE_DEBUG_LOG)) return
+        val now = System.currentTimeMillis()
+        val start = logThrottleWindowStart[tag]
+        if (start == null || now - start >= LOG_THROTTLE_WINDOW_MS) {
+            logThrottleWindowStart[tag] = now
+            HookUtils.log(msg)
+            scheduleThrottleFlush(tag)
+        } else {
+            logThrottleSuppressed.getOrPut(tag) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
+        }
+    }
+
+    private fun scheduleThrottleFlush(tag: String) {
+        val runnable = Runnable {
+            val n = logThrottleSuppressed.remove(tag)?.get() ?: 0
+            logThrottleWindowStart.remove(tag)
+            synchronized(logThrottleFlush) { logThrottleFlush.remove(tag) }
+            if (n > 0 && isFeatureEnabledSafe(targetClassLoader, JumpConstants.KEY_ENABLE_DEBUG_LOG)) {
+                HookUtils.log("[$tag] 窗口内还有 $n 次同类事件")
+            }
+        }
+        synchronized(logThrottleFlush) {
+            logThrottleFlush.remove(tag)?.let { debounceHandler.removeCallbacks(it) }
+            logThrottleFlush[tag] = runnable
+        }
+        debounceHandler.postDelayed(runnable, LOG_THROTTLE_WINDOW_MS)
+    }
+
     fun logError(msg: String, e: Throwable? = null) {
         HookUtils.err(msg, e)
 
