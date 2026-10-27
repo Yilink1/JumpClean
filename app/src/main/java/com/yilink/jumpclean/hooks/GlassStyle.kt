@@ -30,7 +30,7 @@ object GlassStyle {
         var edge = 1        // 0 通透 / 1 标准 / 2 明显
         var dynamicBg = false
         var diagLog = false
-        var pillHeight = 64
+        var pillHeight = 60
         var pillMarginH = 24
         var pillMarginBottom = 12
         val shadowBlur = 16
@@ -69,7 +69,7 @@ object GlassStyle {
         edge = i("edge", edge).coerceIn(0, 2)
         dynamicBg = ConfigManager.getBooleanPref(PREFIX + "dynamic", dynamicBg)
         diagLog = ConfigManager.getBooleanPref("lg_diag", false)
-        pillHeight = i("pill_height", pillHeight).coerceIn(60, 76)
+        pillHeight = i("pill_height", pillHeight).coerceIn(52, 76)
         pillMarginH = i("pill_margin_h", pillMarginH).coerceIn(12, 40)
         pillMarginBottom = i("pill_margin_bottom", pillMarginBottom).coerceIn(4, 28)
     }
@@ -88,7 +88,7 @@ object GlassStyle {
             .putInt(PREFIX + "edge", p.edge.coerceIn(0, 2))
             .putBoolean(PREFIX + "dynamic", p.dynamicBg)
             .putBoolean("lg_diag", p.diagLog)
-            .putInt(PREFIX + "pill_height", p.pillHeight.coerceIn(60, 76))
+            .putInt(PREFIX + "pill_height", p.pillHeight.coerceIn(52, 76))
             .putInt(PREFIX + "pill_margin_h", p.pillMarginH.coerceIn(12, 40))
             .putInt(PREFIX + "pill_margin_bottom", p.pillMarginBottom.coerceIn(4, 28))
             .apply()

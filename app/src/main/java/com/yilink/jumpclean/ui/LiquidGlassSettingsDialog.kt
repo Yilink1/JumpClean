@@ -235,7 +235,7 @@ object LiquidGlassSettingsDialog {
         }
         content.addView(more)
         val moreStart = content.childCount
-        slider("底栏高度", 60, 76, " dp", { p.pillHeight }, { p.pillHeight = it })
+        slider("底栏高度", 52, 76, " dp", { p.pillHeight }, { p.pillHeight = it })
         slider("左右留白", 12, 40, " dp", { p.pillMarginH }, { p.pillMarginH = it })
         slider("底部距离", 4, 28, " dp", { p.pillMarginBottom }, { p.pillMarginBottom = it })
         toggle("持续更新背景", "视频与轮播实时透过玻璃，会增加耗电", { p.dynamicBg }, { p.dynamicBg = it })

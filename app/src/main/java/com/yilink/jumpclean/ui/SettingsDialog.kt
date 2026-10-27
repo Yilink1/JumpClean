@@ -557,7 +557,6 @@ object SettingsDialog {
 
     private fun showBlackLevelDialog(activity: Activity, prefs: SharedPreferences) {
         val dp = { value: Int -> (value * activity.resources.displayMetrics.density).toInt() }
-        val isDark = (activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
         // 固定纯深色暗黑主题，沉浸式预览夜间模式
         val dialogBg = Color.parseColor("#18181A")
@@ -599,7 +598,6 @@ object SettingsDialog {
         root.addView(subTitle)
 
         var selectedLevel = currentLevel
-        val names = com.yilink.jumpclean.hooks.EyeCareHooks.BLACK_LEVEL_NAMES
         val colors = com.yilink.jumpclean.hooks.EyeCareHooks.BLACK_LEVELS
         val shortLabels = arrayOf("极深", "深灰", "微紫", "稍浅", "更浅")
         val selectStrokeColor = Color.parseColor("#A1A1AA") // 低调柔白边框，不晃眼
