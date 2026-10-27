@@ -548,11 +548,10 @@ object FeedHooks {
         while (iterator.hasNext()) {
             val item = iterator.next() ?: continue
 
-            // 1. 小酱推广贴：锁定仅在推荐流剔除 (网络层为主，此处高效数据层剔除并自增计数器)
+            // 1. 小酱推广贴：锁定仅在推荐流剔除 (网络层为主，此处兜底剔除，网络层已计数)
             if (isPromoEnabled && isFromRecommendStream && isOfficialPromoModel(item)) {
                 iterator.remove()
                 modified = true
-                ConfigManager.recordOfficialPromoBlocked()
                 ConfigManager.log("✔ [数据剔除] 推荐流命中官方推广规则")
                 continue
             }

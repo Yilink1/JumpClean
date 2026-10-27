@@ -402,4 +402,20 @@ object HookUtils {
             null
         }
     }
+
+    // ── 通用视图显隐批量应用（主页 / 游戏详情页共用） ──
+    fun applyTargetViewsVisibility(view: View, targetIds: Set<Int>, restoreIds: Set<Int>) {
+        for (id in targetIds) {
+            val targetView = view.findViewById<View>(id) ?: continue
+            if (!HookUtils.isCollapsed(targetView)) {
+                HookUtils.collapseView(targetView)
+            }
+        }
+        for (id in restoreIds) {
+            val targetView = view.findViewById<View>(id) ?: continue
+            if (HookUtils.isCollapsed(targetView)) {
+                HookUtils.restoreView(targetView)
+            }
+        }
+    }
 }

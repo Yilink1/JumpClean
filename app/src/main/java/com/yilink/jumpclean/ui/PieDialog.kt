@@ -313,7 +313,7 @@ object PieDialog {
         val closeBtnText = if (isDark) Color.parseColor("#E4E4E7") else Color.parseColor("#3A3A3C")
 
         val closeBtn = TextView(activity).apply {
-            text = "吃饱了，收起大饼"
+            text = "收起大饼"
             textSize = 14f
             setTypeface(null, Typeface.BOLD)
             setTextColor(closeBtnText)

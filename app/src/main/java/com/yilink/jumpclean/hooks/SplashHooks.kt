@@ -379,10 +379,6 @@ object SplashHooks {
     }
 
     private fun hookNotificationAd(classLoader: ClassLoader) {
-        // 极致性能：用户未开启时彻底 0 Hook、0 JNI 跳板、0 虚拟机侵入
-        if (!ConfigManager.isFeatureEnabledSafe(classLoader, JumpConstants.KEY_BLOCK_NOTIFICATION_AD)) {
-            return
-        }
 
         // 核心架构层拦截：GlobalViewModel.onReceiveMessage (阻止前台消息处理与震动横幅派发)
         try {

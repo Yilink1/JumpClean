@@ -340,7 +340,7 @@ object LiquidGlassSettingsDialog {
             paint.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             paint.textSize = 12f * d
             paint.color = if (night) 0xFFAEB7C8.toInt() else 0xFF6E7D92.toInt()
-            canvas.drawText(if (night) "夜间 / 安静一点" else "日间 / 轻盈一点", 16f * d, 25f * d, paint)
+            canvas.drawText(if (night) "夜间 / 深邃" else "日间 / 通透", 16f * d, 25f * d, paint)
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {

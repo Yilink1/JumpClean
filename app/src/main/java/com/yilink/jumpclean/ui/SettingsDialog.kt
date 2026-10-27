@@ -30,7 +30,7 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import com.yilink.jumpclean.config.ConfigManager
 import com.yilink.jumpclean.config.JumpConstants
-import com.yilink.jumpclean.hooks.ViewCleanHooks
+import com.yilink.jumpclean.hooks.HomeHooks
 
 sealed interface SettingEntry
 data class SectionHeader(val title: String) : SettingEntry
@@ -78,6 +78,7 @@ object SettingsDialog {
             SectionHeader("启动与弹窗"),
             SettingItem(JumpConstants.KEY_SKIP_SPLASH, "跳过开屏广告"),
             SettingItem(JumpConstants.KEY_HIDE_VOUCHER_POPUP, "屏蔽营销弹窗"),
+            SettingItem(JumpConstants.KEY_BLOCK_NOTIFICATION_AD, "屏蔽通知广告"),
             SettingItem(JumpConstants.KEY_HIDE_MSG_PUSH_GUIDE, "屏蔽通知开启引导"),
 
             SectionHeader("首页"),
@@ -121,44 +122,27 @@ object SettingsDialog {
             },
 
             SectionHeader("个人中心"),
-            SettingItem(
-                JumpConstants.KEY_PREVENT_WISHLIST_FLASH,
-                "平滑个人主页刷新",
-                desc = "抑制切换到「我的」时心愿单、游戏墙、动态等模块瞬时闪烁归零"
-            ),
             SettingItem(JumpConstants.KEY_HIDE_MEMBER_CARD, "隐藏 Jump+ 会员卡片"),
             SettingItem(JumpConstants.KEY_HIDE_MY_ORDER, "隐藏「我的订单」"),
             SettingItem(JumpConstants.KEY_HIDE_PHOTO_WALL, "隐藏截图展示墙"),
             SettingItem(JumpConstants.KEY_HIDE_WIDGET_VIP_TAG, "隐藏小组件会员标识"),
 
             SectionHeader("底栏"),
-            SettingItem(
-                JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV,
-                "底栏液态玻璃 (实验性)",
-                desc = "通透悬浮底栏，自动适配日间与夜间"
-            ),
-            ActionItem("玻璃底栏外观", desc = "日间与夜间分别配色，内置实时预览") {
+            SettingItem(JumpConstants.KEY_HIDE_WEB_TAB, "隐藏「Jump 赏」"),
+            SettingItem(JumpConstants.KEY_HIDE_LOTTERY_TAB, "隐藏「抽奖 / 全新 App」"),
+            SettingItem(JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV, "液态玻璃 (实验性)"),
+            ActionItem("玻璃底栏外观") {
                 LiquidGlassSettingsDialog.show(activity, false, null) {
                     try {
                         com.yilink.jumpclean.hooks.LiquidGlassHooks.refreshFromSettings()
                     } catch (_: Throwable) {}
                 }
             },
-            SettingItem(JumpConstants.KEY_HIDE_WEB_TAB, "隐藏「Jump 赏」"),
-            SettingItem(JumpConstants.KEY_HIDE_LOTTERY_TAB, "隐藏「抽奖 / 全新 App」"),
 
             SectionHeader("夜间护眼"),
-            SettingItem(
-                JumpConstants.KEY_EYE_SOFT_BLACK,
-                "柔化纯黑背景",
-                desc = "夜间模式下把 #000000 底色换成深灰；修改后需重启 App"
-            ),
-            SettingItem(
-                JumpConstants.KEY_EYE_SOFT_WHITE,
-                "柔化纯白文字",
-                desc = "夜间模式下把 #FFFFFF 文字压成柔白，减轻黑底白字的刺眼感；需重启 App"
-            ),
-            ActionItem("夜间底色深浅", desc = "在 #121212 ~ #2C2C31 之间选一档") {
+            SettingItem(JumpConstants.KEY_EYE_SOFT_BLACK, "柔化纯黑背景", desc = "夜间模式底色换成深灰；需重启生效"),
+            SettingItem(JumpConstants.KEY_EYE_SOFT_WHITE, "柔化纯白文字", desc = "夜间模式白字压柔，减轻刺眼；需重启生效"),
+            ActionItem("夜间底色深浅", desc = "多档深色可选") {
                 showBlackLevelDialog(activity, prefs)
             },
 
@@ -168,8 +152,7 @@ object SettingsDialog {
             },
             SettingItem(
                 JumpConstants.KEY_ENABLE_DEBUG_LOG,
-                "开启调试日志",
-                desc = "总开关：记录模块运行日志。玻璃的帧率/底栏追踪另有开关（玻璃面板 → 开发者 → 玻璃诊断日志），需两者同时开"
+                "开启调试日志"
             ),
             ActionItem("查看诊断日志", desc = "查看近期 200 行运行日志") {
                 LogDialog.show(activity)
@@ -177,9 +160,9 @@ object SettingsDialog {
 
             SectionHeader("实验性功能"),
             SettingItem(
-                JumpConstants.KEY_BLOCK_NOTIFICATION_AD,
-                "屏蔽通知广告",
-                desc = "去除应用内突袭震动横幅广告"
+                JumpConstants.KEY_PREVENT_WISHLIST_FLASH,
+                "平滑个人主页刷新",
+                desc = "抑制切换到「我的」时心愿单、游戏墙、动态等模块瞬时闪烁归零"
             ),
             ActionItem("大  饼", desc = "只能看不能用") {
                 PieDialog.show(activity) { enabled ->
@@ -349,7 +332,6 @@ object SettingsDialog {
         var currentCardLayout: LinearLayout? = null
 
         // 屏蔽通知广告在启动期按需挂载，修改后提示重启生效
-        val restartRequiredKeys = setOf(JumpConstants.KEY_BLOCK_NOTIFICATION_AD)
 
         items.forEach { entry ->
             when (entry) {
@@ -408,16 +390,13 @@ object SettingsDialog {
                         this.isChecked = isChecked
                         setOnCheckedChangeListener { _, checked ->
                             prefs.edit().putBoolean(entry.key, checked).apply()
-                            ViewCleanHooks.applyAllUIVisibility(activity)
+                            HomeHooks.applyAllUIVisibility(activity)
                             // 本对话框盖在 MainActivity 上，MainActivity 不会 onResume，所以玻璃开关要主动触发一次应用
                             if (entry.key == JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV) {
                                 try { com.yilink.jumpclean.hooks.LiquidGlassHooks.refreshFromSettings() } catch (_: Throwable) {}
                             }
                             if (entry.key == JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST || entry.key == JumpConstants.KEY_ENABLE_KEYWORD_BLOCK) {
                                 try { com.yilink.jumpclean.hooks.FeedHooks.cleanCurrentAdapter() } catch (_: Throwable) {}
-                            }
-                            if (entry.key in restartRequiredKeys) {
-                                showRestartPrompt(activity, isDark, dp)
                             }
                         }
                     }
@@ -464,16 +443,13 @@ object SettingsDialog {
                         this.isChecked = isChecked
                         setOnCheckedChangeListener { _, checked ->
                             prefs.edit().putBoolean(entry.key, checked).apply()
-                            ViewCleanHooks.applyAllUIVisibility(activity)
+                            HomeHooks.applyAllUIVisibility(activity)
                             // 本对话框盖在 MainActivity 上，MainActivity 不会 onResume，所以玻璃开关要主动触发一次应用
                             if (entry.key == JumpConstants.KEY_ENABLE_LIQUID_GLASS_NAV) {
                                 try { com.yilink.jumpclean.hooks.LiquidGlassHooks.refreshFromSettings() } catch (_: Throwable) {}
                             }
                             if (entry.key == JumpConstants.KEY_EXP_BLOCK_OFFICIAL_PROMO_POST || entry.key == JumpConstants.KEY_ENABLE_KEYWORD_BLOCK) {
                                 try { com.yilink.jumpclean.hooks.FeedHooks.cleanCurrentAdapter() } catch (_: Throwable) {}
-                            }
-                            if (entry.key in restartRequiredKeys) {
-                                showRestartPrompt(activity, isDark, dp)
                             }
                         }
                     }
@@ -578,107 +554,6 @@ object SettingsDialog {
         }
     }
 
-    private fun showRestartPrompt(activity: Activity, isDark: Boolean, dp: (Int) -> Int) {
-        val promptDialog = Dialog(activity).apply {
-            requestWindowFeature(Window.FEATURE_NO_TITLE)
-            window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        }
-
-        val cardBg = if (isDark) Color.parseColor("#242426") else Color.WHITE
-        val primaryText = if (isDark) Color.parseColor("#F5F5F7") else Color.parseColor("#1C1C1E")
-        val secondaryText = if (isDark) Color.parseColor("#8E8E93") else Color.parseColor("#8A8A8E")
-        val cancelBtnBg = if (isDark) Color.parseColor("#323236") else Color.parseColor("#F0F0F2")
-        val cancelBtnText = if (isDark) Color.parseColor("#D1D1D6") else Color.parseColor("#636366")
-        val accentColor = Color.parseColor("#E54D42") // 柔和温润的 Jump 珊瑚红
-
-        val card = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            minimumWidth = dp(300)
-            background = GradientDrawable().apply {
-                setColor(cardBg)
-                cornerRadius = dp(20).toFloat()
-            }
-            setPadding(dp(22), dp(22), dp(22), dp(18))
-            layoutParams = ViewGroup.LayoutParams(dp(300), ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-
-        val titleView = TextView(activity).apply {
-            text = "重启 App 生效"
-            textSize = 17f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(primaryText)
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-
-        val descView = TextView(activity).apply {
-            text = "此项改动需重启后生效"
-            textSize = 13.5f
-            setTextColor(secondaryText)
-            gravity = Gravity.CENTER
-            textAlignment = View.TEXT_ALIGNMENT_CENTER
-            setLineSpacing(dp(3).toFloat(), 1f)
-            setPadding(dp(6), dp(10), dp(6), dp(20))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-
-        val btnContainer = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-
-        val cancelBtn = TextView(activity).apply {
-            text = "稍后"
-            textSize = 14f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(cancelBtnText)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(10), 0, dp(10))
-            background = GradientDrawable().apply {
-                setColor(cancelBtnBg)
-                cornerRadius = dp(12).toFloat()
-            }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = dp(6)
-            }
-            setOnClickListener { promptDialog.dismiss() }
-        }
-
-        val restartBtn = TextView(activity).apply {
-            text = "立即重启"
-            textSize = 14f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(10), 0, dp(10))
-            background = GradientDrawable().apply {
-                setColor(accentColor)
-                cornerRadius = dp(12).toFloat()
-            }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = dp(6)
-            }
-            setOnClickListener {
-                promptDialog.dismiss()
-                restartApp(activity)
-            }
-        }
-
-        btnContainer.addView(cancelBtn)
-        btnContainer.addView(restartBtn)
-
-        card.addView(titleView)
-        card.addView(descView)
-        card.addView(btnContainer)
-
-        promptDialog.setContentView(card)
-        promptDialog.show()
-        promptDialog.window?.let { win ->
-            win.setLayout(dp(300), ViewGroup.LayoutParams.WRAP_CONTENT)
-            win.setGravity(Gravity.CENTER)
-        }
-    }
 
     private fun showBlackLevelDialog(activity: Activity, prefs: SharedPreferences) {
         val dp = { value: Int -> (value * activity.resources.displayMetrics.density).toInt() }
@@ -715,7 +590,7 @@ object SettingsDialog {
             setTextColor(primaryText)
         }
         val subTitle = TextView(activity).apply {
-            text = "轻点色块，在被窝里选一档最舒适的暗色"
+            text = "轻点色块，选一档最舒适的暗色"
             textSize = 12f
             setTextColor(secondaryText)
             setPadding(0, dp(4), 0, dp(14))
