@@ -71,6 +71,10 @@ app/src/main/java/com/yilink/jumpclean/
     ├── EasterEggDialog.kt       #   实验性大饼：特性交互与彩蛋触发器
     └── IconPickerDialog.kt      #   图标选择器：内置 21 款主题图标自由切换
 ```
+## 鸣谢
+
+- [LibXposed](https://github.com/libxposed/api)：现代化 Xposed 模块开发接口
+- [Liquid-Glass-Android](https://github.com/QWEA0/Liquid-Glass-Android)：Android View 体系液态玻璃效果实现
 
 ## 开源协议
 
